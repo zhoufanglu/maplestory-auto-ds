@@ -1,0 +1,22 @@
+# MapleStory Auto Detection — Dependencies
+# Python 3.8+
+
+# Computer vision
+opencv-python>=4.5.0
+numpy>=1.20.0
+
+# Screen capture (Windows)
+windows-capture
+
+# YAML configuration
+pyyaml>=5.4
+
+# Keyboard simulation (for future movement/attack control)
+pyautogui>=0.9.53
+pynput>=1.7.0
+
+# Windows API (already installed with pywin32 typically)
+pywin32>=300
+
+# Data validation (optional, for future use)
+# pydantic>=2.0

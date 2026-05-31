@@ -1,0 +1,25 @@
+/MapleStoryAutoLevelUp-main/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+
+# Logs and screenshots
+log/
+screenshot/
+video/
+
+# OS files
+.DS_Store
+Thumbs.db
