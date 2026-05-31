@@ -459,3 +459,95 @@ def is_img_16_to_9(img: np.ndarray, cfg: dict) -> bool:
     expected = 16.0 / 9.0
     tolerance = cfg.get("game_window", {}).get("ratio_tolerance", 0.08)
     return abs(ratio - expected) <= tolerance
+
+
+# ---------------------------------------------------------------------------
+# Minimap detection (adapted from reference project common.py)
+# ---------------------------------------------------------------------------
+
+def get_minimap_loc_size(img_frame: np.ndarray):
+    """
+    Detects the minimap location and size in the game frame.
+
+    Finds white-bordered rectangles via connected components analysis.
+    The minimap has 1px white borders on all four sides.
+
+    Returns:
+        (x, y, w, h) or None if not found.
+    """
+    white = np.array([255, 255, 255])
+    mask_white = cv2.inRange(img_frame, white, white)
+    num_labels, labels, stats, centroids = \
+        cv2.connectedComponentsWithStats(mask_white, connectivity=8)
+
+    for i in range(1, num_labels):
+        x0, y0, rw, rh, area = stats[i]
+        if rw < 100 or rh < 100:
+            continue
+        x1 = x0 + rw - 1
+        y1 = y0 + rh - 1
+
+        # Check 1px white borders on all sides
+        if not (np.all(img_frame[y0, x0:x0 + rw] == white)
+                and np.all(img_frame[y1, x0:x0 + rw] == white)):
+            continue
+        if not (np.all(img_frame[y0:y0 + rh, x0] == white)
+                and np.all(img_frame[y0:y0 + rh, x1] == white)):
+            continue
+
+        # Bounding box of non-white content inside the white border
+        mask_nonwhite = np.any(
+            img_frame[y0:y0 + rh, x0:x0 + rw] != white, axis=2
+        ).astype(np.uint8)
+        coords = cv2.findNonZero(mask_nonwhite)
+        if coords is None:
+            continue
+        x_m, y_m, w_m, h_m = cv2.boundingRect(coords)
+        return (x_m + x0, y_m + y0, w_m, h_m)
+
+    return None
+
+
+def get_player_location_on_minimap(
+    img_minimap: np.ndarray,
+    player_color=(136, 255, 255)
+):
+    """
+    Find the player's position on the minimap by color matching.
+
+    Args:
+        img_minimap: Minimap image ROI.
+        player_color: BGR color of the player dot on minimap.
+
+    Returns:
+        (x, y) center of player dot, or None.
+    """
+    mask = cv2.inRange(img_minimap, player_color, player_color)
+    coords = cv2.findNonZero(mask)
+    if coords is None or len(coords) < 4:
+        return None
+    avg = coords.mean(axis=0)[0]
+    return (int(round(avg[0])), int(round(avg[1])))
+
+
+def get_all_other_player_locations_on_minimap(
+    img_minimap: np.ndarray,
+    red_bgr=(0, 0, 255)
+):
+    """
+    Detect other players as red dots on the minimap.
+
+    Tries increasing color tolerance to find red pixels.
+
+    Returns:
+        List of (x, y) tuples.
+    """
+    red_bgr = tuple(map(int, red_bgr))
+    for tolerance in [10, 20, 30, 40]:
+        lower = tuple(max(0, c - tolerance) for c in red_bgr)
+        upper = tuple(min(255, c + tolerance) for c in red_bgr)
+        mask = cv2.inRange(img_minimap, lower, upper)
+        coords = cv2.findNonZero(mask)
+        if coords is not None and len(coords) >= 3:
+            return [tuple(pt[0]) for pt in coords]
+    return []

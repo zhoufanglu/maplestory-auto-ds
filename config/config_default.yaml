@@ -33,6 +33,7 @@ character:
 # 怪物检测设置
 # ---------------------------------------------------------------------------
 monster_detect:
+  monsters: []               # 指定怪物文件夹，空=扫描monster/下全部。示例: ["black_axe_stump", "OrangeMushroom"]
   mode: "color"              # 检测模式: "color" / "grayscale" / "contour_only" / "template_free"
   diff_thres: 0.10           # SQDIFF_NORMED 阈值（越小越严格）
   max_mob_area_trigger: 5000 # 触发攻击的最大怪物面积

@@ -101,15 +101,19 @@ class MonsterDetector:
         Returns:
             True if at least one monster was loaded successfully.
         """
-        # Find all monster directories
-        monster_dirs = [
-            d for d in glob.glob("monster/*")
-            if os.path.isdir(d)
-        ]
-
-        if not monster_dirs:
-            logger.error("No monster directories found in monster/")
-            return False
+        # Load specified monsters from config, or scan all directories
+        specified = self.cfg["monster_detect"].get("monsters", [])
+        if specified:
+            monster_dirs = [os.path.join("monster", m) for m in specified
+                            if os.path.isdir(os.path.join("monster", m))]
+            if not monster_dirs:
+                logger.error(f"Specified monster dirs not found: {specified}")
+                return False
+        else:
+            monster_dirs = [d for d in glob.glob("monster/*") if os.path.isdir(d)]
+            if not monster_dirs:
+                logger.error("No monster directories found in monster/")
+                return False
 
         for monster_dir in monster_dirs:
             monster_name = os.path.basename(monster_dir)
@@ -124,13 +128,13 @@ class MonsterDetector:
                 logger.warning(f"No usable PNG images in {monster_dir}, skipping.")
                 continue
 
-            # Only use the FIRST image per monster (reference project uses 1-2 per monster)
-            first_file = png_files[0]
-            try:
-                img, mask = self._load_monster_template(first_file)
-                imgs.append((img, mask))
-            except Exception as e:
-                logger.warning(f"Failed to load {first_file}: {e}")
+            # Load all images (no flips — saves 50% matchTemplate calls)
+            for file in png_files:
+                try:
+                    img, mask = self._load_monster_template(file)
+                    imgs.append((img, mask))
+                except Exception as e:
+                    logger.warning(f"Failed to load {file}: {e}")
 
             if not imgs:
                 continue
@@ -138,8 +142,7 @@ class MonsterDetector:
             if imgs:
                 self.monsters_info[monster_name] = imgs
                 logger.info(
-                    f"  Loaded {len(png_files)} images for '{monster_name}' "
-                    f"({len(imgs)} with flips)"
+                    f"  Loaded {len(imgs)} templates for '{monster_name}'"
                 )
             else:
                 logger.warning(f"No valid images in {monster_dir}")
@@ -631,8 +634,7 @@ class MonsterDetector:
                     thickness=2, text_height=0.5
                 )
 
-        # Pre-scale display frame in background thread (display thread just imshows it)
-        if self.is_show_debug and self.img_frame_debug is not None:
+        # Pre-scale display frame in background thread
             scale = self.cfg["monster_detect"].get("display_scale", 0.55)
             if scale != 1.0:
                 self.img_display = cv2.resize(

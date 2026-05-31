@@ -8,7 +8,8 @@ system:
   fps_limit_main: 15                # 处理帧率（越大越快，参考项目用10）
 
 monster_detect:
+  monsters: ["black_axe_stump"]     # 指定怪物文件夹，数组可多个
   mode: "color"                     # color / grayscale / contour_only
-  diff_thres: 0.20                  # 匹配阈值（越小越严格，0.05~0.30）
-  display_scale: 0.55               # 监视器缩放 (0.3~1.0)
+  diff_thres: 0.45                  # 匹配阈值（越小越严格，大了会满屏误检卡死）
+  display_scale: 0.55               # 监视器缩放 (0.3~1)
   detection_interval: 2             # 每N帧检测一次 (1=每帧, 3=流畅优先)
