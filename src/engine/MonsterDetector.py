@@ -128,11 +128,15 @@ class MonsterDetector:
                 logger.warning(f"No usable PNG images in {monster_dir}, skipping.")
                 continue
 
-            # Load all images (no flips — saves 50% matchTemplate calls)
+            # Load all images + horizontally flipped copies (for both directions)
             for file in png_files:
                 try:
                     img, mask = self._load_monster_template(file)
                     imgs.append((img, mask))
+                    # Flipped copy for right-facing monsters
+                    img_flip = cv2.flip(img, 1)
+                    mask_flip = cv2.flip(mask, 1) if mask is not None else None
+                    imgs.append((img_flip, mask_flip))
                 except Exception as e:
                     logger.warning(f"Failed to load {file}: {e}")
 
@@ -142,7 +146,8 @@ class MonsterDetector:
             if imgs:
                 self.monsters_info[monster_name] = imgs
                 logger.info(
-                    f"  Loaded {len(imgs)} templates for '{monster_name}'"
+                    f"  Loaded {len(png_files)} images for '{monster_name}' "
+                    f"({len(imgs)} with flips)"
                 )
             else:
                 logger.warning(f"No valid images in {monster_dir}")
@@ -329,55 +334,67 @@ class MonsterDetector:
         diff_thres = self.cfg["monster_detect"]["diff_thres"]
         h, w = img_monster.shape[:2]
 
-        # Single-scale matching (reference project uses 1 scale for speed)
-        tmpl, msk, th, tw = img_monster, mask_monster, h, w
+        # Multi-scale matching (configured via monster_detect.scales)
+        scales = self.cfg["monster_detect"].get("scales", [1.0])
 
-        try:
-            if mode == "contour_only":
-                mask_pat = np.all(tmpl == [0, 0, 0], axis=2).astype(np.uint8) * 255
-                mask_roi = np.all(img_roi == [0, 0, 0], axis=2).astype(np.uint8) * 255
-                mask_roi[char_y_min:char_y_max, char_x_min:char_x_max] = 0
-                blur = self.cfg["monster_detect"].get("contour_blur", 5)
-                res = cv2.matchTemplate(
-                    cv2.GaussianBlur(mask_roi, (blur, blur), 0),
-                    cv2.GaussianBlur(mask_pat, (blur, blur), 0),
-                    cv2.TM_SQDIFF_NORMED
-                )
-            elif mode == "grayscale":
-                tmpl_gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
-                roi_gray = cv2.cvtColor(img_roi, cv2.COLOR_BGR2GRAY)
-                if msk is not None:
-                    res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED, mask=msk)
-                else:
-                    res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED)
-            elif mode == "color":
-                if msk is not None:
-                    res = cv2.matchTemplate(img_roi, tmpl, cv2.TM_SQDIFF_NORMED, mask=msk)
-                else:
-                    res = cv2.matchTemplate(img_roi, tmpl, cv2.TM_SQDIFF_NORMED)
+        for scale in scales:
+            if scale == 1.0:
+                tmpl, msk, th, tw = img_monster, mask_monster, h, w
             else:
-                return []
-        except cv2.error:
-            return []
+                tw = max(8, int(w * scale))
+                th = max(8, int(h * scale))
+                tmpl = cv2.resize(img_monster, (tw, th), interpolation=cv2.INTER_NEAREST)
+                if mask_monster is not None:
+                    msk = cv2.resize(mask_monster, (tw, th), interpolation=cv2.INTER_NEAREST)
+                else:
+                    msk = None
 
-        # Track best score
-        min_val, _, _, _ = cv2.minMaxLoc(res)
-        if min_val < self.best_score:
-            self.best_score = min_val
+            try:
+                if mode == "contour_only":
+                    mask_pat = np.all(tmpl == [0, 0, 0], axis=2).astype(np.uint8) * 255
+                    mask_roi = np.all(img_roi == [0, 0, 0], axis=2).astype(np.uint8) * 255
+                    mask_roi[char_y_min:char_y_max, char_x_min:char_x_max] = 0
+                    blur = self.cfg["monster_detect"].get("contour_blur", 5)
+                    res = cv2.matchTemplate(
+                        cv2.GaussianBlur(mask_roi, (blur, blur), 0),
+                        cv2.GaussianBlur(mask_pat, (blur, blur), 0),
+                        cv2.TM_SQDIFF_NORMED
+                    )
+                elif mode == "grayscale":
+                    tmpl_gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
+                    roi_gray = cv2.cvtColor(img_roi, cv2.COLOR_BGR2GRAY)
+                    if msk is not None:
+                        res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED, mask=msk)
+                    else:
+                        res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED)
+                elif mode == "color":
+                    if msk is not None:
+                        res = cv2.matchTemplate(img_roi, tmpl, cv2.TM_SQDIFF_NORMED, mask=msk)
+                    else:
+                        res = cv2.matchTemplate(img_roi, tmpl, cv2.TM_SQDIFF_NORMED)
+                else:
+                    return []
+            except cv2.error:
+                continue
 
-        # Collect ALL matches below threshold (reference project: np.where approach)
-        match_locations = np.where(res <= diff_thres)
-        count = 0
-        for pt in zip(*match_locations[::-1]):
-            if count >= 50:
-                break
-            monsters.append({
-                "name": monster_name,
-                "position": (pt[0] + x0, pt[1] + y0),
-                "size": (th, tw),
-                "score": res[pt[1], pt[0]],
-            })
-            count += 1
+            # Track best score
+            min_val, _, _, _ = cv2.minMaxLoc(res)
+            if min_val < self.best_score:
+                self.best_score = min_val
+
+            # Collect matches below threshold
+            match_locations = np.where(res <= diff_thres)
+            count = 0
+            for pt in zip(*match_locations[::-1]):
+                if count >= 50:
+                    break
+                monsters.append({
+                    "name": monster_name,
+                    "position": (pt[0] + x0, pt[1] + y0),
+                    "size": (th, tw),
+                    "score": res[pt[1], pt[0]],
+                })
+                count += 1
 
         return monsters
 

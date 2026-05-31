@@ -10,6 +10,7 @@ system:
 monster_detect:
   monsters: ["black_axe_stump"]     # 指定怪物文件夹，数组可多个
   mode: "color"                     # color / grayscale / contour_only
-  diff_thres: 0.45                  # 匹配阈值（越小越严格，大了会满屏误检卡死）
+  diff_thres: 0.46              # 匹配阈值（越小越严格）
+  scales: [1]                     # 缩放比例，官方素材不匹配时改: [0.7, 0.85, 1.0, 1.15]
   display_scale: 0.55               # 监视器缩放 (0.3~1)
   detection_interval: 2             # 每N帧检测一次 (1=每帧, 3=流畅优先)

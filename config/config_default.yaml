@@ -36,6 +36,9 @@ monster_detect:
   monsters: []               # 指定怪物文件夹，空=扫描monster/下全部。示例: ["black_axe_stump", "OrangeMushroom"]
   mode: "color"              # 检测模式: "color" / "grayscale" / "contour_only" / "template_free"
   diff_thres: 0.10           # SQDIFF_NORMED 阈值（越小越严格）
+  scales: [1.0]              # 缩放比例数组，官方素材和游戏分辨率不匹配时加多个比例
+                             #   示例: [0.7, 0.85, 1.0, 1.15, 1.3] 覆盖更大范围
+                             #   只设 [1.0] = 单尺度，性能最好
   max_mob_area_trigger: 5000 # 触发攻击的最大怪物面积
   search_box_margin: 50      # 搜索框额外边距
   contour_blur: 5            # 高斯模糊核大小（仅 contour_only 模式）
