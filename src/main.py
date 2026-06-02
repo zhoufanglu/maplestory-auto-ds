@@ -125,12 +125,12 @@ def main():
                                 _, _, win_w, win_h = rect
                                 cv2.moveWindow(win_name,
                                                screen_w - win_w - 20,
-                                               screen_h - win_h - 80)
+                                               screen_h - win_h - 100)
                                 window_positioned = True
                         except Exception:
                             pass
 
-            key = cv2.waitKey(1) & 0xFF
+            key = cv2.waitKey(5) & 0xFF
             if key == ord('q') or key == 27:
                 logger.info("Quit key pressed.")
                 detector.is_terminated = True

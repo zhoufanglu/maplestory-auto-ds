@@ -1,16 +1,18 @@
 # ============================================================================
 # MapleStory Auto Detection — 自定义配置
 # ============================================================================
-# 这里覆盖 config_default.yaml 中的默认值
-# ============================================================================
 
 system:
-  fps_limit_main: 15                # 处理帧率（越大越快，参考项目用10）
+  fps_limit_main: 15
+
+title:
+  enable: true                       # 用称号定位角色
+  offset: [0, -60]                  # 称号→角色中心偏移 [x,y]，负y=向上
 
 monster_detect:
-  monsters: ["black_axe_stump"]     # 指定怪物文件夹，数组可多个
-  mode: "color"                     # color / grayscale / contour_only
-  diff_thres: 0.46              # 匹配阈值（越小越严格）
-  scales: [1]                     # 缩放比例，官方素材不匹配时改: [0.7, 0.85, 1.0, 1.15]
-  display_scale: 0.55               # 监视器缩放 (0.3~1)
-  detection_interval: 2             # 每N帧检测一次 (1=每帧, 3=流畅优先)
+  monsters: ["black_axe_stump"]
+  mode: "color"
+  diff_thres: 0.46
+  scales: [1]
+  display_scale: 0.58
+  detection_interval: 2

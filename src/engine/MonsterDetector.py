@@ -62,8 +62,19 @@ class MonsterDetector:
         self.img_frame_debug = None     # Debug visualization frame
         self.img_display = None         # Pre-scaled frame for display thread
 
-        # Player location — set to center of first frame in run_once()
+        # Player location — detected via title template matching
         self.loc_player = (0, 0)
+        self.loc_title = None  # Last known title position (for fast local search)
+
+        # Load title template for player detection
+        self.img_title = None
+        self.img_title_gray = None
+        if os.path.exists("character/title.png"):
+            self.img_title = load_image("character/title.png")
+            self.img_title_gray = load_image("character/title.png", cv2.IMREAD_GRAYSCALE)
+            logger.info(f"  Loaded title template: {self.img_title.shape[1]}x{self.img_title.shape[0]}")
+        else:
+            logger.warning("  No character/title.png found, player will stay at frame center")
 
         # Timers
         self.t_last_frame = time.time()
@@ -531,6 +542,53 @@ class MonsterDetector:
             (255, 255, 0), "Search", thickness=2, text_height=0.5
         )
 
+    def _detect_player_by_title(self):
+        """Detect player location by matching the title template (at character feet)."""
+        if self.img_title is None:
+            h, w = self.img_frame.shape[:2]
+            self.loc_player = (w // 2, h // 2)
+            return
+
+        h, w = self.img_frame.shape[:2]
+        title_offset = self.cfg.get("title", {}).get("offset", [0, -60])
+
+        # White-mask binarization: extract only bright pixels from template + frame
+        # (参考项目 nametag white_mask 模式，对文字类模板更准)
+        lower_white, upper_white = (150, 255)
+        img_nametag_bin = cv2.inRange(self.img_title_gray, lower_white, upper_white)
+        img_roi_bin = cv2.inRange(self.img_frame_gray, lower_white, upper_white)
+
+        # Gaussian blur to soften edges
+        img_nametag_bin = cv2.GaussianBlur(img_nametag_bin, (3, 3), 0)
+        img_roi_bin = cv2.GaussianBlur(img_roi_bin, (3, 3), 0)
+
+        # Match binary masks
+        loc, score, is_cached = find_pattern_sqdiff(
+            img_roi_bin, img_nametag_bin,
+            last_result=self.loc_title,
+            global_threshold=0.3
+        )
+
+        if self.frame_count % 30 == 0:
+            logger.info(f"[Title] score={score:.4f} cached={is_cached}")
+
+        if score < 0.3:
+            self.loc_title = loc
+            tw, th = self.img_title.shape[1], self.img_title.shape[0]
+            self.loc_player = (
+                loc[0] + tw // 2 + title_offset[0],
+                loc[1] + th // 2 + title_offset[1]
+            )
+            if self.img_frame_debug is not None:
+                draw_rectangle(
+                    self.img_frame_debug,
+                    loc, (th, tw), (255, 0, 0),
+                    f"TITLE {score:.2f}", thickness=3, text_height=0.7
+                )
+        elif self.loc_title is None:
+            h, w = self.img_frame.shape[:2]
+            self.loc_player = (w // 2, h // 2)
+
     def _draw_player_marker(self):
         """Draw the player position marker on the debug frame."""
         if self.img_frame_debug is None:
@@ -561,11 +619,23 @@ class MonsterDetector:
             "Press 'Q' or 'ESC' to quit",
         ]
 
+        # Bottom-left positioning (matches reference project)
+        text_y_interval = 25
+        text_y_start = self.img_frame.shape[0] - len(texts) * text_y_interval - 10
+        font_scale = 0.8  # +2 sizes from 0.6
+
         for i, text in enumerate(texts):
+            x, y = 10, text_y_start + text_y_interval * i
+            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                cv2.putText(
+                    self.img_frame_debug, text,
+                    (x + dx, y + dy),
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2, cv2.LINE_AA
+                )
             cv2.putText(
                 self.img_frame_debug, text,
-                (10, 30 + 25 * i),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA
+                (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), 2, cv2.LINE_AA
             )
 
         # Monster count in top-right corner (big text, eye-catching)
@@ -600,9 +670,11 @@ class MonsterDetector:
                 activate_game_window(self.capture.window_title)
             return -1
 
-        # Update player location to center of actual frame
-        h, w = self.img_frame.shape[:2]
-        self.loc_player = (w // 2, h // 2)
+        # Convert to grayscale (for title detection + grayscale matching)
+        self.img_frame_gray = cv2.cvtColor(self.img_frame, cv2.COLOR_BGR2GRAY)
+
+        # Detect player via title template matching
+        self._detect_player_by_title()
 
         # Compute search region (same formula for detection & display)
         margin = self.cfg["monster_detect"].get("search_box_margin", 50)
