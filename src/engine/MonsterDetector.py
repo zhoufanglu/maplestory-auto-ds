@@ -70,6 +70,7 @@ class MonsterDetector:
         # Minimap
         self.loc_minimap = (0, 0)
         self.img_minimap = None
+        self.loc_player_minimap = None
 
         # Load title template for player detection
         self.img_title = None
@@ -700,6 +701,17 @@ class MonsterDetector:
             self.loc_minimap = (x, y)
             self.img_minimap = self.img_frame[y:y + h, x:x + w]
 
+            # Find player dot on minimap (with tolerance for anti-aliasing)
+            player_color = self.cfg.get("minimap", {}).get("player_color", (34, 255, 255))
+            tolerance = self.cfg.get("minimap", {}).get("player_tolerance", 20)
+            lower = tuple(max(0, c - tolerance) for c in player_color)
+            upper = tuple(min(255, c + tolerance) for c in player_color)
+            mask = cv2.inRange(self.img_minimap, lower, upper)
+            coords = cv2.findNonZero(mask)
+            if coords is not None and len(coords) >= 3:
+                avg = coords.mean(axis=0)[0]
+                self.loc_player_minimap = (int(round(avg[0])), int(round(avg[1])))
+
         # Detect player via title template matching
         self._detect_player_by_title()
 
@@ -747,6 +759,15 @@ class MonsterDetector:
                     self.img_minimap.shape[:2],
                     (0, 0, 255), "minimap", thickness=2
                 )
+                # Draw player dot position on minimap
+                if self.loc_player_minimap:
+                    mx, my = self.loc_player_minimap
+                    px = self.loc_minimap[0] + mx
+                    py = self.loc_minimap[1] + my
+                    # Bright green dot + label (BGR: 0,255,0 = green, not yellow)
+                    cv2.circle(self.img_frame_debug, (px, py), 6, (0, 255, 0), -1)
+                    cv2.putText(self.img_frame_debug, "P", (px+8, py+5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             self._draw_player_marker()          # Player dot
             for monster in self.monsters:       # Monster boxes (top layer)
                 color = (0, 255, 255) if monster["name"] == "Health Bar" else (0, 255, 0)

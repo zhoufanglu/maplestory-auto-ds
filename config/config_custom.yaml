@@ -10,6 +10,8 @@ minimap:
   y: 149
   width: 189
   height: 144
+  player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
+  player_tolerance: 25            # 颜色容差，匹配不到就调大（20~60）
 
 monster_detect:
   monsters: ["black_axe_stump"]
