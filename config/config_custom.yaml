@@ -1,13 +1,15 @@
-# ============================================================================
-# MapleStory Auto Detection — 自定义配置
-# ============================================================================
-
 system:
   fps_limit_main: 15
 
 title:
-  enable: true                       # 用称号定位角色
-  offset: [0, -60]                  # 称号→角色中心偏移 [x,y]，负y=向上
+  enable: true
+  offset: [0, -60]
+
+minimap:
+  x: 10
+  y: 149
+  width: 189
+  height: 144
 
 monster_detect:
   monsters: ["black_axe_stump"]

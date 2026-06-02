@@ -24,7 +24,8 @@ from src.utils.logger import logger
 from src.utils.common import (
     load_yaml, load_image, get_mask, find_pattern_sqdiff,
     nms, draw_rectangle, screenshot, to_opencv_hsv,
-    activate_game_window, is_mac, is_windows
+    activate_game_window, is_mac, is_windows,
+    get_minimap_loc_size
 )
 from src.input.GameWindowCapturor import GameWindowCapturor
 
@@ -65,6 +66,10 @@ class MonsterDetector:
         # Player location — detected via title template matching
         self.loc_player = (0, 0)
         self.loc_title = None  # Last known title position (for fast local search)
+
+        # Minimap
+        self.loc_minimap = (0, 0)
+        self.img_minimap = None
 
         # Load title template for player detection
         self.img_title = None
@@ -589,6 +594,21 @@ class MonsterDetector:
             h, w = self.img_frame.shape[:2]
             self.loc_player = (w // 2, h // 2)
 
+    def _detect_minimap(self):
+        """
+        Get minimap position from config. Falls back to frame-relative estimation.
+        The minimap in MapleStoryGo is at a fixed UI position (top-left of game).
+        """
+        mm_cfg = self.cfg.get("minimap", {})
+        x = mm_cfg.get("x", 0)
+        y = mm_cfg.get("y", 0)
+        w_m = mm_cfg.get("width", 0)
+        h_m = mm_cfg.get("height", 0)
+
+        if w_m > 10 and h_m > 10:
+            return (x, y, w_m, h_m)
+        return None
+
     def _draw_player_marker(self):
         """Draw the player position marker on the debug frame."""
         if self.img_frame_debug is None:
@@ -673,6 +693,13 @@ class MonsterDetector:
         # Convert to grayscale (for title detection + grayscale matching)
         self.img_frame_gray = cv2.cvtColor(self.img_frame, cv2.COLOR_BGR2GRAY)
 
+        # Detect minimap (adapted for MapleStoryGo: bright fill + dark borders)
+        minimap_result = self._detect_minimap()
+        if minimap_result:
+            x, y, w, h = minimap_result
+            self.loc_minimap = (x, y)
+            self.img_minimap = self.img_frame[y:y + h, x:x + w]
+
         # Detect player via title template matching
         self._detect_player_by_title()
 
@@ -712,6 +739,14 @@ class MonsterDetector:
         if self.is_show_debug:
             self._update_debug_overlay()        # Text first (bottom layer)
             self._draw_search_region(x0, y0, x1, y1)  # Search border
+            # Draw minimap rectangle (matches reference project)
+            if self.img_minimap is not None:
+                draw_rectangle(
+                    self.img_frame_debug,
+                    self.loc_minimap,
+                    self.img_minimap.shape[:2],
+                    (0, 0, 255), "minimap", thickness=2
+                )
             self._draw_player_marker()          # Player dot
             for monster in self.monsters:       # Monster boxes (top layer)
                 color = (0, 255, 255) if monster["name"] == "Health Bar" else (0, 255, 0)
