@@ -1,22 +1,36 @@
+bot:
+  map: "she_sheou_1"
+  enable_route: true
+
 system:
   fps_limit_main: 15
 
 title:
   enable: true
   offset: [0, -60]
-
+#  这个是魔法密林 北部2的 位置 先存下
+#  x: 10
+#  y: 149
+#  width: 189
+#  height: 144
+############################
 minimap:
-  x: 10
-  y: 149
-  width: 189
-  height: 144
+  x: 11
+  y: 152
+  width: 180
+  height: 142
   player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
-  player_tolerance: 25            # 颜色容差，匹配不到就调大（20~60）
+  player_tolerance: 8            # 颜色容差起始值（会自动扩大到+30）
 
 monster_detect:
   monsters: ["black_axe_stump"]
-  mode: "color"
-  diff_thres: 0.46
-  scales: [1]
-  display_scale: 0.58
-  detection_interval: 2
+  # monsters: ["OrangeMushroom2"]
+  mode: "color"                     # color / grayscale / contour_only
+  diff_thres: 0.18                  # 匹配阈值 0.0~1.0（越小越严格）
+  scales: [1.1]                 # 缩放比例数组 [0.5~1.5]，素材不匹配时加多个: [0.8, 1.0, 1.2]
+  display_scale: 0.58               # 监视器缩放 0.1~1.0（越小越流畅）
+  detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
+
+route:
+  climb_y_offset: 0.5                 # 爬梯Y偏移量（像素），改小=梯子更短
+  climb_y_interval: 5             # 每N帧偏移一次，改大=梯子更短

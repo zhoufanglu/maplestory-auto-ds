@@ -25,7 +25,7 @@ from src.utils.common import (
     load_yaml, load_image, get_mask, find_pattern_sqdiff,
     nms, draw_rectangle, screenshot, to_opencv_hsv,
     activate_game_window, is_mac, is_windows,
-    get_minimap_loc_size
+    get_minimap_loc_size, mask_route_colors
 )
 from src.input.GameWindowCapturor import GameWindowCapturor
 
@@ -71,6 +71,22 @@ class MonsterDetector:
         self.loc_minimap = (0, 0)
         self.img_minimap = None
         self.loc_player_minimap = None
+
+        # Route following
+        self.img_map = None             # Global stitched map (map.png)
+        self.img_routes = []            # Route images (route*.png)
+        self.img_route = None           # Current route
+        self.idx_routes = 0             # Current route index
+        self.color_code = {}            # RGB→command mapping
+        self.color_code_up_down = {}    # Up/down RGB→command mapping
+        self.cmd_move_x = "none"
+        self.cmd_move_y = "none"
+        self.cmd_action = "none"
+        self.loc_player_global = (0.0, 0.0)
+        self.loc_minimap_global = (0, 0)
+        self._last_pmm = None   # Last player minimap position (for displacement tracking)
+        self.is_on_ladder = False
+        self._kb = None  # Keyboard controller (set externally)
 
         # Load title template for player detection
         self.img_title = None
@@ -556,29 +572,38 @@ class MonsterDetector:
             return
 
         h, w = self.img_frame.shape[:2]
-        title_offset = self.cfg.get("title", {}).get("offset", [0, -60])
+        title_cfg = self.cfg.get("title", {})
+        title_offset = title_cfg.get("offset", [0, -60])
 
         # White-mask binarization: extract only bright pixels from template + frame
         # (参考项目 nametag white_mask 模式，对文字类模板更准)
-        lower_white, upper_white = (150, 255)
+        lower_white = title_cfg.get("white_lower", 150)
+        upper_white = title_cfg.get("white_upper", 255)
         img_nametag_bin = cv2.inRange(self.img_title_gray, lower_white, upper_white)
         img_roi_bin = cv2.inRange(self.img_frame_gray, lower_white, upper_white)
 
         # Gaussian blur to soften edges
-        img_nametag_bin = cv2.GaussianBlur(img_nametag_bin, (3, 3), 0)
-        img_roi_bin = cv2.GaussianBlur(img_roi_bin, (3, 3), 0)
+        blur_k = title_cfg.get("blur_kernel", 3)
+        img_nametag_bin = cv2.GaussianBlur(img_nametag_bin, (blur_k, blur_k), 0)
+        img_roi_bin = cv2.GaussianBlur(img_roi_bin, (blur_k, blur_k), 0)
 
         # Match binary masks
+        match_threshold = title_cfg.get("match_threshold", 0.3)
         loc, score, is_cached = find_pattern_sqdiff(
             img_roi_bin, img_nametag_bin,
             last_result=self.loc_title,
-            global_threshold=0.3
+            global_threshold=match_threshold
         )
 
-        if self.frame_count % 30 == 0:
-            logger.info(f"[Title] score={score:.4f} cached={is_cached}")
+        # Log score every frame for first 100 frames, then every 30 frames
+        if self.frame_count <= 100 or self.frame_count % 30 == 0:
+            status = "HIT" if score < match_threshold else "MISS"
+            logger.info(
+                f"[Title] frame={self.frame_count} score={score:.4f} "
+                f"thresh={match_threshold:.2f} {status} cached={is_cached}"
+            )
 
-        if score < 0.3:
+        if score < match_threshold:
             self.loc_title = loc
             tw, th = self.img_title.shape[1], self.img_title.shape[0]
             self.loc_player = (
@@ -597,18 +622,175 @@ class MonsterDetector:
 
     def _detect_minimap(self):
         """
-        Get minimap position from config. Falls back to frame-relative estimation.
-        The minimap in MapleStoryGo is at a fixed UI position (top-left of game).
+        Detect minimap via white border (reference project pattern).
+        Falls back to config if detection fails.
         """
-        mm_cfg = self.cfg.get("minimap", {})
-        x = mm_cfg.get("x", 0)
-        y = mm_cfg.get("y", 0)
-        w_m = mm_cfg.get("width", 0)
-        h_m = mm_cfg.get("height", 0)
+        # Try auto-detection first (white border method)
+        result = get_minimap_loc_size(self.img_frame)
+        if result:
+            x, y, w_m, h_m = result
+            if self.frame_count == 1:
+                logger.info(f"[Minimap] Auto-detected: ({x},{y}) {w_m}x{h_m}")
+            return (x + 1, y + 1, w_m - 2, h_m - 2)
 
-        if w_m > 10 and h_m > 10:
-            return (x, y, w_m, h_m)
+        # Fallback to config
+        mm_cfg = self.cfg.get("minimap", {})
+        if mm_cfg.get("width", 0) > 10:
+            return (mm_cfg["x"], mm_cfg["y"], mm_cfg["width"], mm_cfg["height"])
         return None
+
+    # -------------------------------------------------------------------
+    # Route following
+    # -------------------------------------------------------------------
+
+    def load_map_and_routes(self, map_name):
+        """Load map.png and route*.png for the given map."""
+        import glob
+        map_path = f"minimaps/{map_name}/map.png"
+        if not os.path.exists(map_path):
+            logger.warning(f"[Route] Map not found: {map_path}")
+            return False
+
+        self.img_map = load_image(map_path, cv2.IMREAD_COLOR)
+        logger.info(f"[Route] Loaded map: {map_path} ({self.img_map.shape[1]}x{self.img_map.shape[0]})")
+
+        # Load route images
+        route_files = sorted(glob.glob(f"minimaps/{map_name}/route*.png"))
+        route_files = [p for p in route_files if "route_rest" not in p]
+        self.img_routes = []
+        for rf in route_files:
+            img = cv2.cvtColor(load_image(rf), cv2.COLOR_BGR2RGB)
+            # Strip map-resident colors matching route codes from route image
+            img = mask_route_colors(self.img_map.copy(), img, self.cfg["route"]["color_code"])
+            img = mask_route_colors(self.img_map.copy(), img, self.cfg["route"]["color_code_up_down"])
+            self.img_routes.append(img)
+            logger.info(f"[Route] Loaded: {rf}")
+
+        if self.img_routes:
+            self.img_route = self.img_routes[0]
+
+        # Parse color→command dictionaries
+        for k, v in self.cfg["route"]["color_code"].items():
+            self.color_code[tuple(map(int, k.split(',')))] = v
+        for k, v in self.cfg["route"]["color_code_up_down"].items():
+            self.color_code_up_down[tuple(map(int, k.split(',')))] = v
+
+        logger.info(f"[Route] Ready: {len(self.img_routes)} routes")
+        return True
+
+    def get_player_global_position(self):
+        """Track global position: X=player dot, Y=manual offset from climbing."""
+        if self.img_map is None or self.img_minimap is None:
+            return
+        if self.loc_player_minimap is None:
+            return
+
+        # Initial positioning: template match to find starting point
+        if self.loc_player_global == (0, 0):
+            loc, score, _ = find_pattern_sqdiff(self.img_map, self.img_minimap)
+            self._last_match_score = score
+            self.loc_minimap_global = loc
+            self.loc_player_global = (
+                loc[0] + self.loc_player_minimap[0],
+                loc[1] + self.loc_player_minimap[1],
+            )
+            self._last_pmm = self.loc_player_minimap
+            return
+
+        # X + Y: track via player dot displacement
+        dx = self.loc_player_minimap[0] - self._last_pmm[0]
+        dy = self.loc_player_minimap[1] - self._last_pmm[1]
+        if abs(dx) < 20 and abs(dy) < 20:
+            self.loc_player_global = (
+                self.loc_player_global[0] + dx,
+                self.loc_player_global[1] + dy,
+            )
+
+        # Fallback: Y offset when climbing (supports 0.5 etc)
+        offset = float(self.cfg["route"].get("climb_y_offset", 1))
+        interval = int(self.cfg["route"].get("climb_y_interval", 15))
+        if self.frame_count % interval == 0:
+            if self.cmd_move_y == "up":
+                self.loc_player_global = (self.loc_player_global[0], self.loc_player_global[1] - offset)
+            elif self.cmd_move_y == "down":
+                self.loc_player_global = (self.loc_player_global[0], self.loc_player_global[1] + offset)
+
+        self._last_pmm = self.loc_player_minimap
+        self.loc_minimap_global = (
+            self.loc_player_global[0] - self.loc_player_minimap[0],
+            self.loc_player_global[1] - self.loc_player_minimap[1],
+        )
+
+        # Periodic drift correction (every 60 frames)
+        if self.frame_count % 60 == 0:
+            loc, score, _ = find_pattern_sqdiff(self.img_map, self.img_minimap)
+            self._last_match_score = score
+            if score < 0.15:
+                self.loc_minimap_global = loc
+                self.loc_player_global = (
+                    loc[0] + self.loc_player_minimap[0],
+                    loc[1] + self.loc_player_minimap[1],
+                )
+
+    def get_nearest_route_color(self):
+        """Scan route image around player for nearest color-coded pixel."""
+        if self.img_route is None or self.loc_player_global == (0.0, 0.0):
+            return None, None
+
+        x0, y0 = int(self.loc_player_global[0]), int(self.loc_player_global[1])
+        h, w = self.img_route.shape[:2]
+        search_range = self.cfg["route"].get("search_range", 10)
+
+        x_min = max(0, x0 - search_range)
+        x_max = min(w, x0 + search_range)
+        y_min = max(0, y0 - search_range)
+        y_max = min(h, y0 + search_range)
+
+        nearest = None
+        nearest_ud = None
+        min_dist = float('inf')
+        min_dist_ud = float('inf')
+
+        for y in range(y_min, y_max):
+            for x in range(x_min, x_max):
+                pixel = tuple(self.img_route[y, x])
+                dist = abs(x - x0) + abs(y - y0)
+                if pixel in self.color_code and dist < min_dist:
+                    nearest = {"pixel": (x, y), "command": self.color_code[pixel], "distance": dist}
+                    min_dist = dist
+                if pixel in self.color_code_up_down and dist < min_dist_ud:
+                    nearest_ud = {"pixel": (x, y), "command": self.color_code_up_down[pixel], "distance": dist}
+                    min_dist_ud = dist
+
+        return nearest, nearest_ud
+
+    def update_cmd_by_route(self):
+        """Convert nearest route color to movement commands."""
+        nearest, nearest_ud = self.get_nearest_route_color()
+
+        if nearest and nearest_ud:
+            if nearest["distance"] < nearest_ud["distance"]:
+                self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest["command"].split()
+                _, cmd, _ = nearest_ud["command"].split()
+                if self.cmd_move_y == "none" and self.is_on_ladder:
+                    self.cmd_move_y = cmd
+            else:
+                self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest_ud["command"].split()
+                cmd, _, _ = nearest["command"].split()
+                if self.cmd_move_x == "none" and self.is_on_ladder:
+                    self.cmd_move_x = cmd
+        elif nearest:
+            self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest["command"].split()
+        elif nearest_ud:
+            self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest_ud["command"].split()
+        else:
+            self.cmd_move_x, self.cmd_move_y, self.cmd_action = "none", "none", "none"
+
+        # Goal → cycle to next route
+        if self.cmd_action == "goal" and self.img_routes:
+            self.idx_routes = (self.idx_routes + 1) % len(self.img_routes)
+            self.img_route = self.img_routes[self.idx_routes]
+            logger.info(f"[Route] Goal reached → route {self.idx_routes + 1}/{len(self.img_routes)}")
 
     def _draw_player_marker(self):
         """Draw the player position marker on the debug frame."""
@@ -630,15 +812,23 @@ class MonsterDetector:
         self.fps = round(1.0 / max(time.time() - self.t_last_frame, 0.001))
 
         diff_thres = self.cfg["monster_detect"]["diff_thres"]
+        route_on = self.cfg["bot"].get("enable_route", False)
         texts = [
-            f"FPS: {self.fps}",
-            f"Monsters: {len(self.monsters)} detected",
-            f"Best score: {self.best_score:.4f} (thres={diff_thres}) {'MATCH' if self.best_score <= diff_thres else 'no match'}",
-            f"Mode: {self.cfg['monster_detect']['mode']} | Scale: {self.cfg['system'].get('display_scale', 1)}",
+            f"FPS: {self.fps} | KB: {'ON' if self._kb and self._kb.is_enable else 'OFF'}",
+            f"Monsters: {len(self.monsters)} | Best: {self.best_score:.4f}/{diff_thres}",
+            f"Mode: {self.cfg['monster_detect']['mode']} | Scale: {self.cfg.get('monster_detect',{}).get('display_scale',1)}",
             f"Frame: {self.img_frame.shape[1]}x{self.img_frame.shape[0]}",
-            "Press 'S' to save screenshot",
-            "Press 'Q' or 'ESC' to quit",
         ]
+
+        if route_on:
+            gx, gy = int(self.loc_player_global[0]), int(self.loc_player_global[1])
+            mx, my = int(self.loc_minimap_global[0]), int(self.loc_minimap_global[1])
+            texts += [
+                f"Route: {self.idx_routes+1}/{len(self.img_routes)} Cmd: {self.cmd_move_x} {self.cmd_move_y} {self.cmd_action}",
+                f"Global: ({gx},{gy}) MM:({mx},{my}) PMM:{self.loc_player_minimap or '?'} Match:{getattr(self,'_last_match_score',1):.3f}",
+                f"Ladder: {self.is_on_ladder} | Map: {self.img_map.shape[1]}x{self.img_map.shape[0]}" if self.img_map is not None else "No map loaded",
+            ]
+        texts += ["S=shot Q=quit F1=toggle"]
 
         # Bottom-left positioning (matches reference project)
         text_y_interval = 25
@@ -701,16 +891,54 @@ class MonsterDetector:
             self.loc_minimap = (x, y)
             self.img_minimap = self.img_frame[y:y + h, x:x + w]
 
-            # Find player dot on minimap (with tolerance for anti-aliasing)
-            player_color = self.cfg.get("minimap", {}).get("player_color", (34, 255, 255))
-            tolerance = self.cfg.get("minimap", {}).get("player_tolerance", 20)
-            lower = tuple(max(0, c - tolerance) for c in player_color)
-            upper = tuple(min(255, c + tolerance) for c in player_color)
-            mask = cv2.inRange(self.img_minimap, lower, upper)
-            coords = cv2.findNonZero(mask)
-            if coords is not None and len(coords) >= 3:
-                avg = coords.mean(axis=0)[0]
-                self.loc_player_minimap = (int(round(avg[0])), int(round(avg[1])))
+            # Find player dot — connected components approach
+            # Player dot is a small compact cluster; terrain yellow is large/scattered
+            player_color = self.cfg.get("minimap", {}).get("player_color", (136, 255, 255))
+            base_tol = self.cfg.get("minimap", {}).get("player_tolerance", 15)
+            for tol in [base_tol, base_tol + 10, base_tol + 20, base_tol + 30]:
+                lower = tuple(max(0, c - tol) for c in player_color)
+                upper = tuple(min(255, c + tol) for c in player_color)
+                mask = cv2.inRange(self.img_minimap, lower, upper)
+                # Find connected components, pick the best one (not terrain blob)
+                num_lbl, lbl, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+                best = None
+                best_score = -1
+                for i in range(1, num_lbl):
+                    area = stats[i, cv2.CC_STAT_AREA]
+                    # Player dot: 3-15 pixels, compact
+                    if 3 <= area <= 15:
+                        # Prefer larger clusters (more confident match)
+                        if area > best_score:
+                            best_score = area
+                            best = centroids[i]
+                if best is not None:
+                    self.loc_player_minimap = (int(round(best[0])), int(round(best[1])))
+                    break
+
+            # Global positioning (layer 3)
+            if self.cfg["bot"].get("enable_route") and self.img_map is not None:
+                self.get_player_global_position()
+
+        # Route following
+        if self.cfg["bot"].get("enable_route") and self.img_route is not None:
+            # Ladder detection
+            prev = getattr(self, '_prev_loc', None)
+            if prev and self.loc_player != (0, 0):
+                dx = abs(self.loc_player[0] - prev[0])
+                dy = abs(self.loc_player[1] - prev[1])
+                if self.is_on_ladder:
+                    if dx > 3:
+                        self.is_on_ladder = False
+                else:
+                    if dx < 3 and dy != 0:
+                        self.is_on_ladder = True
+            self._prev_loc = self.loc_player
+
+            self.update_cmd_by_route()
+            if self._kb:
+                self._kb.set_command(
+                    f"{self.cmd_move_x} {self.cmd_move_y} {self.cmd_action}"
+                )
 
         # Detect player via title template matching
         self._detect_player_by_title()
@@ -768,6 +996,36 @@ class MonsterDetector:
                     cv2.circle(self.img_frame_debug, (px, py), 6, (0, 255, 0), -1)
                     cv2.putText(self.img_frame_debug, "P", (px+8, py+5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # Route minimap preview in top-right corner (matches reference project)
+            if self.img_route is not None and self.loc_player_global != (0.0, 0.0):
+                route_bgr = cv2.cvtColor(self.img_route, cv2.COLOR_RGB2BGR)
+                gx, gy = int(self.loc_player_global[0]), int(self.loc_player_global[1])
+                # Draw player dot on route preview (yellow)
+                cv2.circle(route_bgr, (gx, gy), 2, (0, 255, 255), -1)
+                # Draw minimap matching rectangle
+                if self.loc_minimap_global != (0, 0):
+                    mmx, mmy = int(self.loc_minimap_global[0]), int(self.loc_minimap_global[1])
+                    mmw = self.img_minimap.shape[1] if self.img_minimap is not None else 0
+                    mmh = self.img_minimap.shape[0] if self.img_minimap is not None else 0
+                    if mmw > 0 and mmh > 0:
+                        cv2.rectangle(route_bgr, (mmx, mmy), (mmx + mmw, mmy + mmh), (0, 255, 255), 1)
+                x0 = max(0, gx - crop_w // 2)
+                y0 = max(0, gy - crop_h // 2)
+                x1 = min(route_bgr.shape[1], x0 + crop_w)
+                y1 = min(route_bgr.shape[0], y0 + crop_h)
+                if x1 > x0 and y1 > y0:
+                    crop = route_bgr[y0:y1, x0:x1]
+                    crop = cv2.resize(crop, (crop.shape[1] * 3, crop.shape[0] * 3),
+                                      interpolation=cv2.INTER_NEAREST)
+                    ch, cw = crop.shape[:2]
+                    fh, fw = self.img_frame_debug.shape[:2]
+                    px_paste = fw - cw - 10
+                    py_paste = 10
+                    self.img_frame_debug[py_paste:py_paste + ch, px_paste:px_paste + cw] = crop
+                    cv2.rectangle(self.img_frame_debug, (px_paste, py_paste),
+                                  (px_paste + cw, py_paste + ch), (255, 255, 255), 2)
+
             self._draw_player_marker()          # Player dot
             for monster in self.monsters:       # Monster boxes (top layer)
                 color = (0, 255, 255) if monster["name"] == "Health Bar" else (0, 255, 0)

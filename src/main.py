@@ -90,6 +90,19 @@ def main():
         logger.error("Failed to load monster images. Exiting.")
         sys.exit(1)
 
+    # Load map and routes if enabled
+    if cfg["bot"].get("enable_route") and cfg["bot"].get("map"):
+        logger.info(f"Loading map/route: {cfg['bot']['map']}...")
+        detector.load_map_and_routes(cfg["bot"]["map"])
+
+    # Create keyboard controller for movement + listener for F1 toggle
+    from src.input.KeyBoardController import KeyBoardController
+    from src.input.KeyBoardListener import KeyBoardListener
+    kb = KeyBoardController(cfg)
+    detector._kb = kb  # Wire to detector
+    kb_listener = KeyBoardListener(cfg, is_autobot=True)
+    kb_listener.register_func_key_handler('f1', kb.toggle)
+
     logger.info("Starting game window capture...")
     detector.start_capture()
 
@@ -102,7 +115,7 @@ def main():
     # Main thread: display loop (matches reference: main() while loop)
     # Processing runs in background, display never blocks.
     # -------------------------------------------------------------------
-    win_name = "Monster Detection — MapleStoryGo"
+    win_name = "NewMaple"
     window_positioned = False
     scale = cfg["monster_detect"].get("display_scale", 0.55)
 
@@ -149,6 +162,8 @@ def main():
         traceback.print_exc()
     finally:
         detector.cleanup()
+        kb.stop()
+        kb_listener.stop()
 
     logger.info("Done.")
 

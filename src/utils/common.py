@@ -551,3 +551,34 @@ def get_all_other_player_locations_on_minimap(
         if coords is not None and len(coords) >= 3:
             return [tuple(pt[0]) for pt in coords]
     return []
+
+
+# ---------------------------------------------------------------------------
+# Route utilities
+# ---------------------------------------------------------------------------
+
+def mask_route_colors(img_map, img_route, color_code):
+    """
+    Black out pixels in img_route where img_map has the same color as
+    any key in color_code. Prevents map terrain from being misread
+    as route commands.
+
+    Args:
+        img_map: The stitched map image (H, W, 3) BGR.
+        img_route: The route image to clean (H, W, 3) RGB.
+        color_code: Dict of {rgb_tuple: action_string}.
+    Returns:
+        Cleaned route image.
+    """
+    # Crop to common size (map and route may have different dimensions)
+    h = min(img_map.shape[0], img_route.shape[0])
+    w = min(img_map.shape[1], img_route.shape[1])
+    for rgb_str in color_code:
+        if isinstance(rgb_str, str):
+            rgb = tuple(map(int, rgb_str.split(',')))
+        else:
+            rgb = rgb_str
+        bgr = (rgb[2], rgb[1], rgb[0])
+        mask = np.all(img_map[:h, :w] == bgr, axis=2)
+        img_route[:h, :w][mask] = [0, 0, 0]
+    return img_route
