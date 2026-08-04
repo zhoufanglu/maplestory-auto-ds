@@ -113,9 +113,9 @@ route:
     "255,0,255": "none none jump"       # 紫: 原地跳
     "0,255,127": "stop stop stop"       # 浅绿: 停止
     "255,255,0": "none none goal"       # 黄: 目标点
-    "255,0,127": "none up teleport"     # 粉: 向上传送
+    "255,0,127": "none up teleport"     # 粉: 向上N传送
     "127,0,255": "none down teleport"   # 紫红: 向下传送
-    "0,127,0": "left none teleport"     # 深绿: 向左传送
+    "0,127,0": "left none teleport"     # 深绿: 向左传送BN
     "139,69,19": "right none teleport"  # 棕: 向右传送
   color_code_up_down:
     "127,127,127": "none up none"       # 灰: 向上爬
