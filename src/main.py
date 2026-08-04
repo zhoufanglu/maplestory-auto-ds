@@ -111,6 +111,15 @@ def main():
     # -------------------------------------------------------------------
     detector.start()
 
+    # Register HP/MP toggle hotkeys (after HealthMonitor is created)
+    if detector.health_monitor is not None:
+        kb_listener.register_func_key_handler(
+            'f2', detector.health_monitor.toggle_hp
+        )
+        kb_listener.register_func_key_handler(
+            'f3', detector.health_monitor.toggle_mp
+        )
+
     # -------------------------------------------------------------------
     # Main thread: display loop (matches reference: main() while loop)
     # Processing runs in background, display never blocks.

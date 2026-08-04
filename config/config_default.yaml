@@ -22,6 +22,9 @@ key:
   aoe_skill: "q"
   directional_attack: "w"
   teleport: "e"
+  add_hp: "end"              # HP药水快捷键
+  add_mp: "home"             # MP药水快捷键
+  return_home: "home"       # 回城卷轴快捷键
 
 # ---------------------------------------------------------------------------
 # 游戏窗口设置
@@ -127,3 +130,32 @@ system:
   fps_limit_route_recorder: 10      # 路线录制器 FPS 上限
   server: "TW"                      # 服务器: "TW" / "NA"
   language: "cn"                    # 语言: "cn" / "eng"
+
+# ---------------------------------------------------------------------------
+# HP/MP 自动回复
+# ---------------------------------------------------------------------------
+health_monitor:
+  enable: true                     # 是否启用自动喝药
+  enable_hp: true                  # HP 自动喝药开关（F2 切换）
+  enable_mp: true                  # MP 自动回蓝开关（F3 切换）
+  force_heal: false                # 优先回血（暂停攻击直到血量恢复）
+  add_hp_percent: 50               # HP 低于此百分比就喝药 [0-100]
+  add_mp_percent: 50               # MP 低于此百分比就喝药 [0-100]
+  add_hp_cooldown: 0.5             # 喝 HP 药水冷却时间（秒）
+  add_mp_cooldown: 0.5             # 喝 MP 药水冷却时间（秒）
+  fps_limit: 20                    # 监控线程 FPS
+  return_home_if_no_potion: false  # 药水耗尽时自动回城
+  return_home_watch_dog_timeout: 3 # 持续低血量多少秒触发回城
+  # --- 血条/蓝条检测参数 ---
+  bar_count: 3                     # 检测几个条（3=HP+MP+EXP, 2=仅HP+MP）
+  bar_white_thresh: 240            # 白色边框提取阈值 (0-255)，调低可匹配灰框
+  bar_min_aspect: 2.5              # 条的最小宽高比（w/h），值越小越宽松
+  bar_max_aspect: 12.0             # 条的最大宽高比
+  bar_min_area: 800                # 条的最小面积（像素）
+  bar_max_area: 8000               # 条的最大面积（像素）
+
+# ---------------------------------------------------------------------------
+# UI 坐标（血条/蓝条位置）
+# ---------------------------------------------------------------------------
+ui_coords:
+  ui_y_start: 610                  # 底部 UI 栏的 Y 起始坐标（血条区域从此处开始）

@@ -582,3 +582,54 @@ def mask_route_colors(img_map, img_route, color_code):
         mask = np.all(img_map[:h, :w] == bgr, axis=2)
         img_route[:h, :w][mask] = [0, 0, 0]
     return img_route
+
+
+# ---------------------------------------------------------------------------
+# HP/MP/EXP bar analysis
+# ---------------------------------------------------------------------------
+
+def get_bar_percent(img: np.ndarray) -> float:
+    """
+    Calculate the fill percentage of an HP/MP/EXP bar from its cropped image.
+
+    Samples the middle row of pixels, skips white border pixels on both sides,
+    then counts how many interior pixels are "filled" vs "empty".
+
+    An "empty" pixel is one where R≈G≈B (grayish) — the unfilled bar color.
+    Anything with significant color channel difference is considered "filled".
+
+    Args:
+        img: BGR image crop of a single bar.
+
+    Returns:
+        Fill percentage as float [0.0, 100.0].
+    """
+    h, w = img.shape[:2]
+    line_pixels = img[h // 2, :]
+
+    # Find left white boundary
+    lb = 0
+    while lb < w and np.all(line_pixels[lb] >= 255):
+        lb += 1
+
+    # Find right white boundary
+    rb = w - 1
+    while rb > lb and np.all(line_pixels[rb] >= 255):
+        rb -= 1
+
+    if rb <= lb:
+        return 0.0
+
+    # Count unfilled pixels (grayish: R≈G≈B, not black)
+    unfill_cnt = 0
+    tolerance = 10
+    for i in range(lb, rb + 1):
+        r, g, b = line_pixels[i]
+        if (abs(int(r) - int(g)) <= tolerance
+                and abs(int(r) - int(b)) <= tolerance
+                and int(r) > 0):
+            unfill_cnt += 1
+
+    total = rb - lb + 1
+    fill_width = total - unfill_cnt
+    return (fill_width / total) * 100.0 if total > 0 else 0.0

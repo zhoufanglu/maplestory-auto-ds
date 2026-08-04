@@ -5,6 +5,10 @@ bot:
 system:
   fps_limit_main: 15
 
+key:
+  add_hp: "end"
+  add_mp: "home"
+
 title:
   enable: true
   offset: [0, -60]
@@ -28,9 +32,25 @@ monster_detect:
   mode: "color"                     # color / grayscale / contour_only
   diff_thres: 0.18                  # 匹配阈值 0.0~1.0（越小越严格）
   scales: [1.1]                 # 缩放比例数组 [0.5~1.5]，素材不匹配时加多个: [0.8, 1.0, 1.2]
-  display_scale: 0.58               # 监视器缩放 0.1~1.0（越小越流畅）
+  display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）
   detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
 
 route:
   climb_y_offset: 0.5                 # 爬梯Y偏移量（像素），改小=梯子更短
   climb_y_interval: 5             # 每N帧偏移一次，改大=梯子更短
+
+health_monitor:
+  enable: true
+  enable_hp: true                  # HP 自动喝药开关（F2 切换）
+  enable_mp: true                  # MP 自动回蓝开关（F3 切换）
+  bar_count: 2                     # 083版本可能只有HP+MP两个条，没有EXP条
+  bar_white_thresh: 200            # 降低阈值以匹配灰色/暗色边框
+  bar_min_aspect: 2.0              # 放宽宽高比范围
+  bar_max_aspect: 15.0
+  bar_min_area: 500                # 放宽面积范围
+  bar_max_area: 12000
+  add_hp_percent: 50
+  add_mp_percent: 50
+
+ui_coords:
+  ui_y_start: 610                   # 根据实际游戏窗口调整：底部UI栏Y起点

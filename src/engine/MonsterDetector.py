@@ -28,6 +28,7 @@ from src.utils.common import (
     get_minimap_loc_size, mask_route_colors
 )
 from src.input.GameWindowCapturor import GameWindowCapturor
+from src.engine.HealthMonitor import HealthMonitor
 
 
 class MonsterDetector:
@@ -87,6 +88,7 @@ class MonsterDetector:
         self._last_pmm = None   # Last player minimap position (for displacement tracking)
         self.is_on_ladder = False
         self._kb = None  # Keyboard controller (set externally)
+        self.health_monitor = None  # Health monitor (initialized in start())
 
         # Load title template for player detection
         self.img_title = None
@@ -808,9 +810,53 @@ class MonsterDetector:
         )
 
     def _update_debug_overlay(self):
-        """Add FPS and status info to the debug frame."""
+        """Add FPS, HP/MP/EXP, and status info to the debug frame."""
         self.fps = round(1.0 / max(time.time() - self.t_last_frame, 0.001))
 
+        # --- HP / MP / EXP display (top-right) ---
+        if self.health_monitor is not None:
+            hm = self.health_monitor
+            bar_count = self.cfg.get("health_monitor", {}).get("bar_count", 3)
+            if bar_count == 2:
+                bar_labels = [("HP", hm.hp_percent, (0, 0, 255), hm.enable_hp),
+                              ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp)]
+            else:
+                bar_labels = [("HP", hm.hp_percent, (0, 0, 255), hm.enable_hp),
+                              ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp),
+                              ("EXP", hm.exp_percent, (0, 255, 0), True)]
+            fw = self.img_frame.shape[1]
+            x_s = fw - 220  # Right-aligned
+            y_s = 30
+            for i, (label, pct, color, enabled) in enumerate(bar_labels):
+                status = "ON" if enabled else "OFF"
+                text = f"{label}: {pct:.1f}% [{status}]"
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.putText(
+                    self.img_frame_debug,
+                    text,
+                    (x_s, y_s + 30 * i),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA
+                )
+                # Bar preview to the left of text
+                if i < len(hm.loc_size_bars):
+                    bx, by, bw, bh = hm.loc_size_bars[i]
+                    if bw > 0 and bh > 0:
+                        ui_y = self.cfg.get("ui_coords", {}).get("ui_y_start", 610)
+                        bar_src = self.img_frame[ui_y:, :]
+                        h_bar, w_bar = bar_src.shape[:2]
+                        if by + bh <= h_bar and bx + bw <= w_bar:
+                            preview = bar_src[by:by + bh, bx:bx + bw].copy()
+                            preview = cv2.resize(preview, (bw * 2, bh * 2),
+                                                 interpolation=cv2.INTER_NEAREST)
+                            px = x_s - bw * 2 - 10  # Preview to left of text
+                            py = y_s + 30 * i - bh
+                            ph, pw = preview.shape[:2]
+                            if (py >= 0 and px >= 0
+                                    and py + ph <= self.img_frame_debug.shape[0]
+                                    and px + pw <= self.img_frame_debug.shape[1]):
+                                self.img_frame_debug[py:py + ph, px:px + pw] = preview
+
+        # --- Status texts (bottom-left) ---
         diff_thres = self.cfg["monster_detect"]["diff_thres"]
         route_on = self.cfg["bot"].get("enable_route", False)
         texts = [
@@ -883,6 +929,11 @@ class MonsterDetector:
 
         # Convert to grayscale (for title detection + grayscale matching)
         self.img_frame_gray = cv2.cvtColor(self.img_frame, cv2.COLOR_BGR2GRAY)
+
+        # Update health monitor with bottom UI strip
+        if self.health_monitor is not None:
+            ui_y = self.cfg.get("ui_coords", {}).get("ui_y_start", 610)
+            self.health_monitor.update_frame(self.img_frame[ui_y:, :])
 
         # Detect minimap (adapted for MapleStoryGo: bright fill + dark borders)
         minimap_result = self._detect_minimap()
@@ -1056,9 +1107,15 @@ class MonsterDetector:
 
     def start(self):
         """
-        Start the background processing thread.
+        Start the background processing thread and health monitor.
         Matches reference: MapleStoryAutoBot.start() → thread_auto_bot
         """
+        # Start health monitor if enabled
+        if (self.cfg.get("health_monitor", {}).get("enable", False)
+                and self._kb is not None):
+            self.health_monitor = HealthMonitor(self.cfg, self._kb)
+            self.health_monitor.start()
+
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
         logger.info("[MonsterDetector] Background processing started.")
@@ -1089,6 +1146,8 @@ class MonsterDetector:
     def cleanup(self):
         """Clean up resources."""
         logger.info("[MonsterDetector] Cleaning up...")
+        if self.health_monitor:
+            self.health_monitor.stop()
         if self.capture:
             self.capture.stop()
         cv2.destroyAllWindows()
