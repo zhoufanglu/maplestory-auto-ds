@@ -11,7 +11,13 @@ key:
 
 title:
   enable: true
+  mode: "grayscale"           # 当前这张 title.png 建议先用 grayscale；如果现场干扰多再切 white_mask
   offset: [0, -60]
+  match_threshold: 0.24        # 先收紧一点，减少误匹配；若经常 MISS 可放宽到 0.28~0.30
+  cache_ttl: 30                # 更频繁重搜，降低锁到错误 UI 文本的概率
+  white_lower: 185             # white_mask 模式备用参数
+  white_upper: 255
+  blur_kernel: 3
 #  这个是魔法密林 北部2的 位置 先存下
 #  x: 10
 #  y: 149

@@ -567,42 +567,106 @@ class MonsterDetector:
         )
 
     def _detect_player_by_title(self):
-        """Detect player location by matching the title template (at character feet)."""
+        """Detect player location by matching the title template."""
+        title_cfg = self.cfg.get("title", {})
+
+        if not title_cfg.get("enable", True):
+            if self.loc_player == (0, 0) and self.img_frame is not None:
+                h, w = self.img_frame.shape[:2]
+                self.loc_player = (w // 2, h // 2)
+            return
+
         if self.img_title is None:
             h, w = self.img_frame.shape[:2]
             self.loc_player = (w // 2, h // 2)
             return
 
-        h, w = self.img_frame.shape[:2]
-        title_cfg = self.cfg.get("title", {})
+        fh, fw = self.img_frame.shape[:2]
         title_offset = title_cfg.get("offset", [0, -60])
+        if not isinstance(title_offset, (list, tuple)) or len(title_offset) != 2:
+            title_offset = [0, -60]
 
-        # White-mask binarization: extract only bright pixels from template + frame
-        # (参考项目 nametag white_mask 模式，对文字类模板更准)
-        lower_white = title_cfg.get("white_lower", 150)
-        upper_white = title_cfg.get("white_upper", 255)
-        img_nametag_bin = cv2.inRange(self.img_title_gray, lower_white, upper_white)
-        img_roi_bin = cv2.inRange(self.img_frame_gray, lower_white, upper_white)
+        mode = str(title_cfg.get("mode", "grayscale")).lower()
 
-        # Gaussian blur to soften edges
-        blur_k = title_cfg.get("blur_kernel", 3)
-        img_nametag_bin = cv2.GaussianBlur(img_nametag_bin, (blur_k, blur_k), 0)
-        img_roi_bin = cv2.GaussianBlur(img_roi_bin, (blur_k, blur_k), 0)
+        try:
+            match_threshold = float(title_cfg.get("match_threshold", 0.3))
+        except (TypeError, ValueError):
+            logger.warning("[Title] Invalid match_threshold, falling back to 0.3")
+            match_threshold = 0.3
 
-        # Match binary masks
-        match_threshold = title_cfg.get("match_threshold", 0.3)
+        try:
+            cache_ttl = int(title_cfg.get("cache_ttl", 60))
+        except (TypeError, ValueError):
+            logger.warning("[Title] Invalid cache_ttl, falling back to 60")
+            cache_ttl = 60
+        if cache_ttl <= 0:
+            cache_ttl = 60
+
+        try:
+            white_lower = int(title_cfg.get("white_lower", 150))
+            white_upper = int(title_cfg.get("white_upper", 255))
+            blur_kernel = int(title_cfg.get("blur_kernel", 3))
+        except (TypeError, ValueError):
+            logger.warning("[Title] Invalid white_mask parameters, falling back to defaults")
+            white_lower, white_upper, blur_kernel = 150, 255, 3
+
+        white_lower = max(0, min(255, white_lower))
+        white_upper = max(white_lower, min(255, white_upper))
+        if blur_kernel < 3 or blur_kernel % 2 == 0:
+            blur_kernel = 0
+
+        # Prepare search/template images based on the requested mode.
+        # grayscale: current behavior, match grayscale image while masking background.
+        # white_mask: threshold bright pixels and match the binarized title shape.
+        if mode == "white_mask":
+            img_title_gray = self.img_title_gray
+            img_search_gray = self.img_frame_gray
+            if blur_kernel:
+                img_title_gray = cv2.GaussianBlur(img_title_gray, (blur_kernel, blur_kernel), 0)
+                img_search_gray = cv2.GaussianBlur(img_search_gray, (blur_kernel, blur_kernel), 0)
+            img_title_proc = cv2.inRange(img_title_gray, white_lower, white_upper)
+            img_search_proc = cv2.inRange(img_search_gray, white_lower, white_upper)
+            mask_title = img_title_proc
+            pattern_img = img_title_proc
+            search_img = img_search_proc
+        else:
+            if mode != "grayscale":
+                logger.warning(f"[Title] Unsupported mode='{mode}', falling back to grayscale")
+            # Green-background mask: ignore background, match text only.
+            mask_title = get_mask(self.img_title, (0, 255, 0))
+            pattern_img = self.img_title_gray
+            search_img = self.img_frame_gray
+
+        # Reset cache every 60 frames to avoid locking onto wrong UI element
+        if self.loc_title is not None and self.frame_count % cache_ttl == 0:
+            self.loc_title = None
+
+        # First match: restrict to center where player always is,
+        # to avoid matching UI elements with similar text patterns.
+        if self.loc_title is None:
+            mx, my = int(fw * 0.15), int(fh * 0.15)
+            img_search = search_img[my:fh - my, mx:fw - mx]
+            last_result = None
+            off_x, off_y = mx, my
+        else:
+            img_search = search_img
+            last_result = self.loc_title
+            off_x, off_y = 0, 0
+
+        # Match
         loc, score, is_cached = find_pattern_sqdiff(
-            img_roi_bin, img_nametag_bin,
-            last_result=self.loc_title,
+            img_search, pattern_img,
+            last_result=last_result,
+            mask=mask_title,
             global_threshold=match_threshold
         )
+        loc = (loc[0] + off_x, loc[1] + off_y)
 
-        # Log score every frame for first 100 frames, then every 30 frames
         if self.frame_count <= 100 or self.frame_count % 30 == 0:
             status = "HIT" if score < match_threshold else "MISS"
             logger.info(
                 f"[Title] frame={self.frame_count} score={score:.4f} "
-                f"thresh={match_threshold:.2f} {status} cached={is_cached}"
+                f"thresh={match_threshold:.2f} loc=({loc[0]},{loc[1]}) {status} cached={is_cached}"
             )
 
         if score < match_threshold:
@@ -610,7 +674,7 @@ class MonsterDetector:
             tw, th = self.img_title.shape[1], self.img_title.shape[0]
             self.loc_player = (
                 loc[0] + tw // 2 + title_offset[0],
-                loc[1] + th // 2 + title_offset[1]
+                loc[1] + th + title_offset[1]
             )
             if self.img_frame_debug is not None:
                 draw_rectangle(
@@ -619,8 +683,7 @@ class MonsterDetector:
                     f"TITLE {score:.2f}", thickness=3, text_height=0.7
                 )
         elif self.loc_title is None:
-            h, w = self.img_frame.shape[:2]
-            self.loc_player = (w // 2, h // 2)
+            self.loc_player = (fw // 2, fh // 2)
 
     def _detect_minimap(self):
         """

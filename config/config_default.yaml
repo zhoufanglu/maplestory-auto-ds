@@ -47,6 +47,7 @@ character:
 # ---------------------------------------------------------------------------
 title:
   enable: true               # 是否启用标题识别
+  mode: "grayscale"         # grayscale = 灰度直接匹配；white_mask = 白色二值化匹配
   offset: [0, -60]           # 标题→角色位置的像素偏移 [x, y]
   white_lower: 150           # 白色二值化下限 (0-255)，越低提取越多偏灰像素
   white_upper: 255           # 白色二值化上限
