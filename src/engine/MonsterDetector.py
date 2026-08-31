@@ -113,6 +113,8 @@ class MonsterDetector:
         self._in_place_state_frame = 0        # frame counter for current state
         self._in_place_walk_dir = "left"      # fallback direction when no facing
         self._in_place_backward_dir = "left"  # backward dir (opposite of facing)
+        self._in_place_start_x = None         # minimap X at walk-about start (for return-to-start)
+        self._in_place_no_monster_frames = 0  # consecutive frames without a monster (for idle AoE)
 
         # Load title template for player detection
         self.img_title = None
@@ -1129,58 +1131,31 @@ class MonsterDetector:
         return True
 
     def get_player_global_position(self):
-        """Track global position: X=player dot, Y=manual offset from climbing."""
+        """Track global position via template matching (handles X and Y, incl. climbing)."""
         if self.img_map is None or self.img_minimap is None:
             return
         if self.loc_player_minimap is None:
             return
 
-        # Initial positioning: template match to find starting point
-        if self.loc_player_global == (0, 0):
-            loc, score, _ = find_pattern_sqdiff(self.img_map, self.img_minimap)
-            self._last_match_score = score
-            self.loc_minimap_global = loc
-            self.loc_player_global = (
-                loc[0] + self.loc_player_minimap[0],
-                loc[1] + self.loc_player_minimap[1],
-            )
-            self._last_pmm = self.loc_player_minimap
-            return
+        # Create mask: ignore black background pixels of the minimap.
+        mask = np.any(self.img_minimap != [0, 0, 0], axis=2).astype(np.uint8) * 255
 
-        # X + Y: track via player dot displacement
-        dx = self.loc_player_minimap[0] - self._last_pmm[0]
-        dy = self.loc_player_minimap[1] - self._last_pmm[1]
-        if abs(dx) < 20 and abs(dy) < 20:
-            self.loc_player_global = (
-                self.loc_player_global[0] + dx,
-                self.loc_player_global[1] + dy,
-            )
-
-        # Fallback: Y offset when climbing (supports 0.5 etc)
-        offset = float(self.cfg["route"].get("climb_y_offset", 1))
-        interval = int(self.cfg["route"].get("climb_y_interval", 15))
-        if self.frame_count % interval == 0:
-            if self.cmd_move_y == "up":
-                self.loc_player_global = (self.loc_player_global[0], self.loc_player_global[1] - offset)
-            elif self.cmd_move_y == "down":
-                self.loc_player_global = (self.loc_player_global[0], self.loc_player_global[1] + offset)
-
-        self._last_pmm = self.loc_player_minimap
-        self.loc_minimap_global = (
-            self.loc_player_global[0] - self.loc_player_minimap[0],
-            self.loc_player_global[1] - self.loc_player_minimap[1],
+        # Template match current minimap against global map (local search only — fast).
+        last_result = None
+        if self.loc_minimap_global != (0, 0):
+            last_result = (int(self.loc_minimap_global[0]), int(self.loc_minimap_global[1]))
+        loc, score, _ = find_pattern_sqdiff(
+            self.img_map, self.img_minimap,
+            last_result=last_result,
+            mask=mask,
+            global_threshold=1.0,  # Always accept local search (never full-image scan)
         )
-
-        # Periodic drift correction (every 60 frames)
-        if self.frame_count % 60 == 0:
-            loc, score, _ = find_pattern_sqdiff(self.img_map, self.img_minimap)
-            self._last_match_score = score
-            if score < 0.15:
-                self.loc_minimap_global = loc
-                self.loc_player_global = (
-                    loc[0] + self.loc_player_minimap[0],
-                    loc[1] + self.loc_player_minimap[1],
-                )
+        self._last_match_score = score
+        self.loc_minimap_global = loc
+        self.loc_player_global = (
+            loc[0] + self.loc_player_minimap[0],
+            loc[1] + self.loc_player_minimap[1],
+        )
 
     def get_nearest_route_color(self):
         """Scan route image around player for nearest color-coded pixel."""
@@ -1445,23 +1420,22 @@ class MonsterDetector:
         Returns (move_x, move_y, action).
         """
         cfg = self.cfg.get("directional_attack", {})
-        interval = max(30, int(cfg.get("in_place_walk_interval", 300)))
-        walk_frames = max(1, int(cfg.get("in_place_walk_frames", 20)))
-        stop_frames = max(1, int(cfg.get("in_place_stop_attack_frames", 8)))  # ~0.5s @15fps
+        fps = max(1.0, float(self.cfg.get("system", {}).get("fps_limit_main", 15)))
+        interval = max(1, int(float(cfg.get("in_place_walk_interval_seconds", 2.0)) * fps))
+        walk_frames = max(1, int(float(cfg.get("in_place_walk_seconds", 0.5)) * fps))
+        walk_back_frames = max(1, int(float(cfg.get("in_place_walk_back_seconds", 0.5)) * fps))
+        stop_frames = max(1, int(float(cfg.get("in_place_stop_attack_seconds", 0.5)) * fps))
 
         # Advance state machine
         if self._in_place_state == "attack":
             self._in_place_state_frame += 1
             if self._in_place_state_frame >= interval:
-                # Decide backward direction: opposite of current facing.
-                facing = self._get_attack_facing()
-                if facing in ("left", "right"):
-                    self._in_place_backward_dir = "right" if facing == "left" else "left"
+                # Fixed walk-away direction from config (default right).
+                dir_behavior = cfg.get("in_place_walk_dir", "right")
+                if dir_behavior == "left":
+                    self._in_place_backward_dir = "left"
                 else:
-                    # No facing info (no monster) — alternate as fallback.
-                    self._in_place_backward_dir = (
-                        "right" if self._in_place_walk_dir == "left" else "left"
-                    )
+                    self._in_place_backward_dir = "right"
                 self._in_place_walk_dir = self._in_place_backward_dir
                 self._in_place_state = "pre_walk"
                 self._in_place_state_frame = 0
@@ -1474,25 +1448,44 @@ class MonsterDetector:
         elif self._in_place_state == "walk_away":
             self._in_place_state_frame += 1
             if self._in_place_state_frame >= walk_frames:
+                self._in_place_state = "mid_pause"
+                self._in_place_state_frame = 0
+        elif self._in_place_state == "mid_pause":
+            # Pause between walking right and walking left.
+            self._in_place_state_frame += 1
+            if self._in_place_state_frame >= stop_frames:
                 self._in_place_state = "walk_back"
                 self._in_place_state_frame = 0
         elif self._in_place_state == "walk_back":
             self._in_place_state_frame += 1
-            if self._in_place_state_frame >= walk_frames:
+            if self._in_place_state_frame >= walk_back_frames:
+                self._in_place_state = "post_walk"
+                self._in_place_state_frame = 0
+        elif self._in_place_state == "post_walk":
+            # Pause after moving, before resuming attack.
+            self._in_place_state_frame += 1
+            if self._in_place_state_frame >= stop_frames:
                 self._in_place_state = "attack"
                 self._in_place_state_frame = 0
 
         # Produce command per state
         if self._in_place_state == "walk_away":
             return self._in_place_backward_dir, "none", "none"   # 往后走
+        elif self._in_place_state == "mid_pause":
+            # On the first frame of the mid pause, fire a single attack once
+            # (attempt to break attack lockout after moving right).
+            if self._in_place_state_frame == 1:
+                return "none", "none", "attack_once"
+            return "none", "none", "none"
         elif self._in_place_state == "walk_back":
             forward_dir = "right" if self._in_place_backward_dir == "left" else "left"
             return forward_dir, "none", "none"                    # 往前走
 
-        # "attack" / "pre_walk": stand still, no movement.
-        # Attack only during "attack" state (not during pre_walk pause).
+        # "attack" / "pre_walk" / "post_walk": stand still, no movement.
+        # Attack only during "attack" state (not during pre/post_walk pause).
         if self._in_place_state == "attack":
             if self.monsters:
+                self._in_place_no_monster_frames = 0
                 aoe_threshold = int(
                     self.cfg.get("directional_attack", {}).get("aoe_monster_count", 3)
                 )
@@ -1502,6 +1495,16 @@ class MonsterDetector:
                 if facing in ("left", "right"):
                     return f"face_{facing}", "none", action
                 return "none", "none", action
+            # No monster detected: after a configurable idle time, fire AoE once
+            # as a scout shot (does not move, so it never conflicts with walk-about).
+            self._in_place_no_monster_frames += 1
+            aoe_idle_seconds = float(
+                self.cfg.get("directional_attack", {}).get("in_place_aoe_idle_seconds", 5.0)
+            )
+            aoe_idle_frames = max(1, int(aoe_idle_seconds * fps))
+            if self._in_place_no_monster_frames >= aoe_idle_frames:
+                self._in_place_no_monster_frames = 0
+                return "none", "none", "aoe"  # one-shot scout shot
             return "none", "none", "none"
         return "none", "none", "none"
 

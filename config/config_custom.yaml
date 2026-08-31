@@ -41,10 +41,10 @@ title:
 #  height: 144
 ############################
 minimap:
-  x: 11
-  y: 152
-  width: 180
-  height: 142
+  x: 15
+  y: 130
+  width: 200
+  height: 98
   player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
   player_tolerance: 8            # 颜色容差起始值（会自动扩大到+30）
 
@@ -64,11 +64,17 @@ monster_detect:
 
 directional_attack:
   attack_in_place: true            # 原地攻击：不移动持续攻击（刷固定点用）
+  range_x: 600                     # 水平攻击范围（像素）——左右距离，调大打得远
+  range_y: 70                      # 垂直攻击范围（像素）——上下距离
+  face_tap_duration: 0.07          # 转身点按时长（秒），太短游戏识别不到会打反方向
+  face_deadzone_px: 8              # 怪物离玩家多近就不转身（像素）x
   aoe_monster_count: 3             # 识别怪物>=此数量时使用群攻
-  in_place_walk_interval: 300      # 原地攻击时每隔多少帧左右走动一次（防攻击失效）
-  in_place_walk_frames: 4         # 单方向走多少帧（走动幅度）
-  in_place_stop_attack_frames: 8  # 移动前先停攻击多少帧（约0.5s@15fps）
-  in_place_walk_dir: "alternate"   # alternate=左右交替 / left / right
+  in_place_aoe_idle_seconds: 3.0   # 原地攻击时，多少秒没怪就放一次群攻(爆炸箭)
+  in_place_walk_interval_seconds: 30    # 原地攻击时每隔多少秒走动一次
+  in_place_walk_seconds: 0.3           # 向右走多少秒
+  in_place_walk_back_seconds: 0.3      # 向左走多少秒
+  in_place_stop_attack_seconds: 0.5    # 移动前后各停多少秒
+  in_place_walk_dir: "right"        # 固定起始方向：right=先右 / left=先左
   search_attack_while_move: false   # 找怪时不攻击，避免停步
   search_flip_frames: 4800            # 每方向走480帧（约16秒@30fps）
   search_max_offset_px: 10000          # 单边最远走600px（翻倍）
