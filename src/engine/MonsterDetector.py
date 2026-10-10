@@ -74,6 +74,7 @@ class MonsterDetector:
         self._selected_title_loc = None
         self._pending_title_select_loc = None
         self._title_lock_miss_count = 0
+        self._title_fixed = False       # F12 toggles: freeze the title box (and player pos)
 
         # Minimap
         self.loc_minimap = (0, 0)
@@ -734,6 +735,10 @@ class MonsterDetector:
 
     def _detect_player_by_title(self):
         """Detect player location by matching the title template (at character feet)."""
+        if self._title_fixed:
+            # Frozen: keep the current title box / player position, skip detection.
+            return
+
         if self.img_title is None:
             self._fallback_player_location()
             return
@@ -1539,35 +1544,42 @@ class MonsterDetector:
                 if i < len(hm.loc_size_bars):
                     bx, by, bw, bh = hm.loc_size_bars[i]
                     if bw > 0 and bh > 0:
-                        ui_y = self.cfg.get("ui_coords", {}).get("ui_y_start", 610)
-                        bar_src = self.img_frame[ui_y:, :]
+                        # loc_size_bars 现在存的是完整画面坐标，直接用完整帧预览
+                        bar_src = self.img_frame
                         h_bar, w_bar = bar_src.shape[:2]
                         if by + bh <= h_bar and bx + bw <= w_bar:
                             preview = bar_src[by:by + bh, bx:bx + bw].copy()
-                            preview = cv2.resize(preview, (bw * 2, bh * 2),
+                            # 预览条缩小到固定宽度，避免太占屏幕
+                            preview_w = 100
+                            preview_h = max(1, int(bh * preview_w / bw))
+                            preview = cv2.resize(preview, (preview_w, preview_h),
                                                  interpolation=cv2.INTER_NEAREST)
-                            px = x_s - bw * 2 - 10  # Preview to left of text
-                            py = y_s + 30 * i - bh
+                            px = x_s - preview_w - 10  # Preview to left of text
+                            py = y_s + 30 * i - preview_h
                             ph, pw = preview.shape[:2]
                             if (py >= 0 and px >= 0
                                     and py + ph <= self.img_frame_debug.shape[0]
                                     and px + pw <= self.img_frame_debug.shape[1]):
                                 self.img_frame_debug[py:py + ph, px:px + pw] = preview
 
-        # --- Bot mode indicator (top-right, below HP/MP) ---
+        # --- Bot mode + title-fix indicator (top-right, below HP/MP) ---
         bot_mode = self.cfg.get("bot", {}).get("mode", "detect")
         mode_color = (0, 255, 0) if bot_mode == "hunt" else (0, 200, 255)
         mode_text = f"Bot: {bot_mode.upper()} [F11]"
-        (mw, mh), _ = cv2.getTextSize(mode_text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
-        mode_x = self.img_frame.shape[1] - mw - 12
-        mode_y = 30 + 30 * 3  # below HP/MP/EXP rows
-        cv2.rectangle(self.img_frame_debug,
-                      (mode_x - 4, mode_y - mh - 4),
-                      (mode_x + mw + 4, mode_y + 4),
-                      (0, 0, 0), -1)
-        cv2.putText(self.img_frame_debug, mode_text,
-                    (mode_x, mode_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, mode_color, 2, cv2.LINE_AA)
+        fix_text = f"Box: {'FIXED' if self._title_fixed else 'FOLLOW'} [F12]"
+        fix_color = (0, 0, 255) if self._title_fixed else (0, 255, 0)
+
+        for i, (text, color) in enumerate([(mode_text, mode_color), (fix_text, fix_color)]):
+            (mw, mh), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+            x = self.img_frame.shape[1] - mw - 12
+            y = 30 + 30 * 3 + 20 * i  # below HP/MP/EXP rows
+            cv2.rectangle(self.img_frame_debug,
+                          (x - 4, y - mh - 4),
+                          (x + mw + 4, y + 4),
+                          (0, 0, 0), -1)
+            cv2.putText(self.img_frame_debug, text,
+                        (x, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
 
         # --- Status texts (bottom-left) ---
         diff_thres = self.cfg["monster_detect"]["diff_thres"]
@@ -1650,18 +1662,10 @@ class MonsterDetector:
         # Convert to grayscale (for title detection + grayscale matching)
         self.img_frame_gray = cv2.cvtColor(self.img_frame, cv2.COLOR_BGR2GRAY)
 
-        # Update health monitor with bottom UI strip
+        # Update health monitor with the full frame; HealthMonitor crops the
+        # bottom UI strip itself (fixed-coordinate mode needs full-frame coords).
         if self.health_monitor is not None:
-            ui_y = self.cfg.get("ui_coords", {}).get("ui_y_start", 610)
-            frame_h = self.img_frame.shape[0]
-            if 0 <= ui_y < frame_h:
-                self.health_monitor.update_frame(self.img_frame[ui_y:, :])
-            else:
-                self.health_monitor.update_frame(None)
-                if self.frame_count % 90 == 0:
-                    logger.warning(
-                        f"[HealthMonitor] ui_y_start out of frame: ui_y_start={ui_y}, frame_h={frame_h}"
-                    )
+            self.health_monitor.update_frame(self.img_frame)
 
         # Detect minimap (adapted for MapleStoryGo: bright fill + dark borders)
         minimap_result = self._detect_minimap()
@@ -1906,6 +1910,12 @@ class MonsterDetector:
         self.cfg["bot"]["mode"] = new_mode
         logger.info(f"[Bot] Mode switched to: {new_mode}")
         return new_mode
+
+    def toggle_title_fixed(self):
+        """Toggle whether the title/player box is frozen at its current position."""
+        self._title_fixed = not self._title_fixed
+        logger.info(f"[Title] Box {'FROZEN' if self._title_fixed else 'FOLLOWING'}")
+        return self._title_fixed
 
     def start(self):
         """

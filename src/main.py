@@ -18,15 +18,25 @@ import logging
 import os
 import sys
 import time
+import threading
 
 import cv2
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Add warning directory to path for alarm detection
+_warning_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "warning")
+sys.path.insert(0, _warning_dir)
+
 from src.utils.logger import logger
 from src.utils.common import load_yaml, override_cfg, is_mac
 from src.engine.MonsterDetector import MonsterDetector
+
+try:
+    import warning as warning_module
+except ImportError:
+    warning_module = None
 
 
 def main():
@@ -122,6 +132,37 @@ def main():
 
     # Register F11 to toggle bot mode (detect <-> hunt)
     kb_listener.register_func_key_handler('f11', detector.toggle_mode)
+
+    # Register F12 to freeze/unfreeze the title/player box
+    kb_listener.register_func_key_handler('f12', detector.toggle_title_fixed)
+
+    # -------------------------------------------------------------------
+    # Warning (测谎/报警) detection — background thread, non-blocking
+    # -------------------------------------------------------------------
+    warning_cfg = cfg.get("warning_monitor", {})
+    warning_enabled = bool(warning_cfg.get("enable", True))
+    warning_interval = float(warning_cfg.get("interval_seconds", 2.0))
+    if warning_interval <= 0:
+        warning_interval = 2.0
+
+    warning_thread = None
+    if warning_module is None:
+        logger.info("[Warning] 警报模块未加载，跳过监控")
+    elif not warning_enabled:
+        logger.info("[Warning] 警报监控已在配置中关闭")
+    else:
+        def _warning_monitor():
+            logger.info("[Warning] 测谎报警监控已启动")
+            while not detector.is_terminated:
+                try:
+                    if warning_module.check_for_warning():
+                        logger.warning("[Warning] 检测到测谎报警弹窗！请及时处理！")
+                except Exception as e:
+                    logger.debug(f"[Warning] 检测异常: {e}")
+                time.sleep(warning_interval)
+
+        warning_thread = threading.Thread(target=_warning_monitor, daemon=True)
+        warning_thread.start()
 
     # -------------------------------------------------------------------
     # Main thread: display loop (matches reference: main() while loop)

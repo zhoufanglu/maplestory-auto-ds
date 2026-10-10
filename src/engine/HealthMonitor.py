@@ -58,6 +58,7 @@ class HealthMonitor:
 
         # Debug: bar bounding boxes [(x, y, w, h), ...]
         self.loc_size_bars = [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 0, 0)]
+        self._bar_diag_count = 0
 
         logger.info("[HealthMonitor] Initialized")
 
@@ -168,6 +169,20 @@ class HealthMonitor:
             return None, None, None
 
         hm_cfg = self.cfg.get("health_monitor", {})
+
+        # 固定坐标模式：游戏 UI 更新后血条位置固定，直接按配置坐标裁剪。
+        # 白框自动检测在条填充过半时会把白框切断、只抓到空槽部分，导致漏识别，
+        # 所以这里优先走固定坐标（更可靠）。
+        if hm_cfg.get("fixed_bars", False):
+            return self._get_percent_fixed_bars(img_frame, hm_cfg)
+
+        # 白框自动检测：裁剪底部 UI 条，减少白框搜索范围。
+        ui_y = self.cfg.get("ui_coords", {}).get("ui_y_start", 610)
+        if 0 <= ui_y < img_frame.shape[0]:
+            img_frame = img_frame[ui_y:, :]
+        else:
+            return None, None, None
+
         bar_min_aspect = hm_cfg.get("bar_min_aspect", 2.5)
         bar_max_aspect = hm_cfg.get("bar_max_aspect", 12.0)
         bar_min_area = hm_cfg.get("bar_min_area", 800)
@@ -299,6 +314,57 @@ class HealthMonitor:
                 f"[HealthMonitor] HP/MP read: HP={percents[0]:.1f}% MP={percents[1]:.1f}% "
                 f"thres=({hm_cfg.get('add_hp_percent', 50)},{hm_cfg.get('add_mp_percent', 50)})"
             )
+        return tuple(percents)
+
+    def _get_percent_fixed_bars(self, img_frame, hm_cfg):
+        """
+        Fixed-coordinate mode: crop HP/MP/EXP bars from configured rects
+        instead of auto-detecting white-bordered bars.
+
+        Coordinate rects are [x, y, w, h]. Values may be absolute pixels
+        (any value > 1.0) or normalized fractions of the frame (0.0 ~ 1.0),
+        so the same config survives window resizing when using fractions.
+        """
+        frame_h, frame_w = img_frame.shape[:2]
+        bar_count = int(hm_cfg.get("bar_count", 2))
+        keys = ["hp_bar_rect", "mp_bar_rect", "exp_bar_rect"][:bar_count]
+
+        rects = []
+        for key in keys:
+            rect = hm_cfg.get(key)
+            if not rect or len(rect) != 4:
+                logger.warning(f"[HealthMonitor] 缺少固定条坐标配置: {key}")
+                return None, None, None
+            x, y, w, h = [float(v) for v in rect]
+            if max(x, y, w, h) <= 1.0:  # 比例坐标 (0~1)
+                x, w = x * frame_w, w * frame_w
+                y, h = y * frame_h, h * frame_h
+            x, y, w, h = int(x), int(y), int(w), int(h)
+            if (x < 0 or y < 0 or x + w > frame_w or y + h > frame_h):
+                logger.warning(
+                    f"[HealthMonitor] 条坐标越界: ({x},{y},{w},{h}) "
+                    f"frame={frame_w}x{frame_h}"
+                )
+                return None, None, None
+            rects.append((x, y, w, h))
+
+        self.loc_size_bars = rects
+
+        percents = []
+        for x, y, w, h in rects:
+            crop = img_frame[y:y + h, x:x + w]
+            if crop is None or crop.size == 0:
+                return None, None, None
+            percents.append(get_bar_percent(crop))
+
+        if bar_count == 2:
+            hp_pct, mp_pct = percents[0], percents[1]
+            if self._bar_diag_count % 60 == 0:
+                logger.info(
+                    f"[HealthMonitor] HP/MP fixed: HP={hp_pct:.1f}% MP={mp_pct:.1f}% "
+                    f"thres=({hm_cfg.get('add_hp_percent', 50)},{hm_cfg.get('add_mp_percent', 50)})"
+                )
+            return hp_pct, mp_pct, 0.0
         return tuple(percents)
 
     # -------------------------------------------------------------------

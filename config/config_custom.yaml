@@ -7,6 +7,10 @@ bot:
 system:
   fps_limit_main: 15
 
+warning_monitor:
+  enable: false
+  interval_seconds: 2.0
+
 key:
   directional_attack: "x"
   aoe_skill: "a"
@@ -71,9 +75,9 @@ directional_attack:
   aoe_monster_count: 3             # 识别怪物>=此数量时使用群攻
   in_place_aoe_idle_seconds: 3.0   # 原地攻击时，多少秒没怪就放一次群攻(爆炸箭)
   in_place_walk_interval_seconds: 30    # 原地攻击时每隔多少秒走动一次
-  in_place_walk_seconds: 0.3           # 向右走多少秒
-  in_place_walk_back_seconds: 0.3      # 向左走多少秒
-  in_place_stop_attack_seconds: 0.5    # 移动前后各停多少秒
+  in_place_walk_seconds: 0.30           # 向右走多少秒
+  in_place_walk_back_seconds: 0.32      # 向左走多少秒
+  in_place_stop_attack_seconds: 0.7    # 移动前后各停多少秒
   in_place_walk_dir: "right"        # 固定起始方向：right=先右 / left=先左
   search_attack_while_move: false   # 找怪时不攻击，避免停步
   search_flip_frames: 4800            # 每方向走480帧（约16秒@30fps）
@@ -92,6 +96,10 @@ health_monitor:
   enable_hp: true                  # HP 自动喝药开关（F2 切换）
   enable_mp: true                  # MP 自动回蓝开关（F3 切换）
   bar_count: 2                     # 083版本可能只有HP+MP两个条，没有EXP条
+  # 固定坐标定位（游戏更新后 UI 血条位置固定，白框检测会漏识别半满条）
+  fixed_bars: true
+  hp_bar_rect: [586, 970, 209, 23]   # HP 血条 [x, y, w, h]（基于 1710x1000 窗口）
+  mp_bar_rect: [795, 970, 208, 23]   # MP 蓝条 [x, y, w, h]（基于 1710x1000 窗口）
   bar_white_thresh: 200            # 降低阈值以匹配灰色/暗色边框
   bar_min_aspect: 2.0              # 放宽宽高比范围
   bar_max_aspect: 15.0
