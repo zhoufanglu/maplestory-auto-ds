@@ -1,5 +1,5 @@
 bot:
-  mode: "hunt" # detect = 只检测不攻击, hunt
+  mode: "detect" # detect = 只检测不攻击, hunt
   attack: "directional"
   map: "north_forest_2"
   enable_route: false
@@ -27,7 +27,7 @@ title:
   manual_track_radius: 180
   manual_track_threshold: 0.30
   offset: [0, -60]
-  match_threshold: 0.24        # 先收紧一点，减少误匹配；若经常 MISS 可放宽到 0.28~0.30
+  match_threshold: 0.28        # 先收紧一点，减少误匹配；若经常 MISS 可放宽到 0.28~0.30
   cache_ttl: 30                # 更频繁重搜，降低锁到错误 UI 文本的概率
   prev_search_radius: 180      # 优先在上次位置附近找，减少吸到其他玩家
   center_search_radius: 320    # 只在屏幕中部较大范围内做中心候选搜索
@@ -38,6 +38,15 @@ title:
   white_lower: 185             # white_mask 模式备用参数
   white_upper: 255
   blur_kernel: 3
+
+appearance:
+  enable: true                    # 用角色外观(fashi.png)辅助定位，防称号丢失/冲突
+  template: "character/fashi.png"
+  search_radius: 140              # 在上次角色位置附近搜索外观的半径(像素)
+  center_fallback_radius: 260     # 无历史位置时围绕屏幕中心搜索
+  match_threshold: 0.62           # CCORR_NORMED 相关度阈值 0~1，越大越严格
+  gate_radius: 90                 # 称号位置与外观位置差超过此值，改用外观定位
+  feet_offset: [0, -6]            # 外观模板底部中心 → 脚底偏移 [x, y]
 #  这个是魔法密林 北部2的 位置 先存下
 #  x: 10
 #  y: 149
@@ -54,17 +63,18 @@ minimap:
 
 monster_detect:
   # monsters: ["Octopus","lan_mo_gu"]
-  monsters: ["Ligator"]
+  # monsters: ["Ligator"]
   # monsters: ["black_axe_stump"]
-  # monsters: ["OrangeMushroom2"]
-  mode: "color"                     # color / grayscale / contour_only
+  monsters: ["mo_gu_shan"]
+  mode: "color"                     # colaor / grayscale / contour_only
   diff_thres: 0.35                  # 匹配阈值 0.0~1.0（越小越严格）
-  scales: [1.25]                 # 缩放比例数组 [0.5~1.5]，素材不匹配时加多个: [0.8, 1.0, 1.2]
+  scales: [1.1]                 # 缩放比例数组 [0.5~1.5]，素材不匹配时加多个: [0.8, 1.0, 1.2]
   display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）
   detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
   with_enemy_hp_bar: true           # 通过怪物血条辅助检测（防掉落物遮挡）
   hp_bar_color: [0, 255, 0]         # 怪物血条 BGR 颜色（绿色）
   hp_bar_tolerance: 30              # 颜色容差（实际是0,243,0，容差30能匹配到）
+  min_color_spread: 30              # 颜色纯度下限（过滤灰色云朵等中性色误识别）
 
 directional_attack:
   attack_in_place: true            # 原地攻击：不移动持续攻击（刷固定点用）
@@ -115,6 +125,7 @@ health_monitor:
   mp_rearm_percent: 12          # 回到该值以上才视为本轮回蓝完成
   hp_retry_timeout: 2.0         # 持续低血时，2秒后允许再喝一瓶
   mp_retry_timeout: 1.5         # 持续低蓝时，1.5秒后允许再喝一瓶
+  warmup_reads: 15              # 启动后前N次有效读数不喝药（防止首帧未渲染误判0%）
 
 ui_coords:
   ui_y_start: 610                   # 根据实际游戏窗口调整：底部UI栏Y起点

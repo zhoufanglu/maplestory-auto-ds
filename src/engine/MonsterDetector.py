@@ -127,6 +127,31 @@ class MonsterDetector:
         else:
             logger.warning("  No character/title.png found, player will stay at frame center")
 
+        # Load character appearance template (unique anchor used to disambiguate
+        # the shared 称号 when it is lost or collides with other players).
+        self.img_appearance = None
+        self.img_appearance_gray = None
+        self.img_appearance_mask = None
+        appearance_path = self.cfg.get("appearance", {}).get("template", "character/fashi.png")
+        if os.path.exists(appearance_path):
+            raw = load_image(appearance_path, cv2.IMREAD_UNCHANGED)
+            if len(raw.shape) == 3 and raw.shape[2] == 4:
+                self.img_appearance = raw[:, :, :3].copy()
+                self.img_appearance_mask = np.where(raw[:, :, 3] > 128, 255, 0).astype(np.uint8)
+            else:
+                self.img_appearance = raw
+                self.img_appearance_mask = self._build_appearance_mask(raw)
+            self.img_appearance_gray = cv2.cvtColor(self.img_appearance, cv2.COLOR_BGR2GRAY)
+            logger.info(
+                f"  Loaded appearance template: {self.img_appearance.shape[1]}x{self.img_appearance.shape[0]}"
+            )
+        else:
+            logger.warning(f"  No appearance template at {appearance_path}, title-only localization")
+
+        # Debug state for the appearance anchor (drawn on the overlay).
+        self.appearance_result = None    # {"loc","size","score","feet"}
+        self.appearance_override = False
+
         # Timers
         self.t_last_frame = time.time()
         self.frame_count = 0
@@ -379,6 +404,24 @@ class MonsterDetector:
 
         return monsters
 
+    @staticmethod
+    def _color_spread(patch: np.ndarray, mask: np.ndarray) -> float:
+        """
+        Mean max-min channel spread over masked pixels.
+
+        0 = neutral gray/white (clouds, sky); high = colorful (monster).
+        Used to reject cloud false positives that pass the SQDIFF threshold.
+        """
+        if mask is None or patch is None or patch.size == 0:
+            return 0.0
+        sel = mask > 0
+        if not np.any(sel):
+            return 0.0
+        px = patch[sel].astype(int)
+        b, g, r = px[:, 0], px[:, 1], px[:, 2]
+        spread = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
+        return float(spread.mean())
+
     def _match_template(
         self,
         img_roi: np.ndarray,
@@ -448,10 +491,17 @@ class MonsterDetector:
 
             # Collect matches below threshold
             match_locations = np.where(res <= diff_thres)
+            min_spread = float(self.cfg["monster_detect"].get("min_color_spread", 30))
             count = 0
             for pt in zip(*match_locations[::-1]):
                 if count >= 50:
                     break
+                # Color guard: reject neutral gray/white patches (clouds, sky)
+                # by requiring enough color spread over the monster's pixels.
+                if msk is not None and min_spread > 0:
+                    patch = img_roi[pt[1]:pt[1] + th, pt[0]:pt[0] + tw]
+                    if self._color_spread(patch, msk) < min_spread:
+                        continue
                 monsters.append({
                     "name": monster_name,
                     "position": (pt[0] + x0, pt[1] + y0),
@@ -604,6 +654,122 @@ class MonsterDetector:
             return
         h, w = self.img_frame.shape[:2]
         self.loc_player = (w // 2, h // 2)
+
+    def _build_appearance_mask(self, img: np.ndarray) -> np.ndarray:
+        """
+        Build a mask for the appearance template.
+
+        fashi.png is a raw screenshot crop (no alpha), so the surrounding map
+        background is baked in. We keep a central ellipse that covers the
+        character body and ignore the corners (sky/clouds, grass) that change
+        as the camera scrolls.
+        """
+        h, w = img.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cx, cy = w // 2, h // 2
+        rx = max(2, int(w * 0.46))
+        ry = max(2, int(h * 0.46))
+        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+        return mask
+
+    def _detect_player_by_appearance(self):
+        """
+        Locate the player by matching the character appearance template.
+
+        The camera follows the player, so the character stays near screen
+        center. We search a window around the last known player position
+        (falling back to screen center) to stay robust against the background
+        baked into fashi.png.
+
+        Returns:
+            (loc_player_feet, score) or (None, None) if no confident match.
+        """
+        if self.img_appearance_gray is None or self.img_frame_gray is None:
+            return None, None
+
+        cfg = self.cfg.get("appearance", {})
+        tmpl = self.img_appearance_gray
+        mask = self.img_appearance_mask
+        th, tw = tmpl.shape[:2]
+        fh, fw = self.img_frame_gray.shape[:2]
+        if th > fh or tw > fw:
+            return None, None
+
+        search_radius = int(cfg.get("search_radius", 140))
+        center_radius = int(cfg.get("center_fallback_radius", 260))
+        match_threshold = float(cfg.get("match_threshold", 0.62))
+
+        anchor = self.loc_player
+        if anchor == (0, 0):
+            anchor = (fw // 2, fh // 2)
+            radius = center_radius
+        else:
+            radius = search_radius
+
+        x0 = max(0, anchor[0] - radius)
+        y0 = max(0, anchor[1] - radius)
+        x1 = min(fw, anchor[0] + radius + tw)
+        y1 = min(fh, anchor[1] + radius + th)
+        if x1 - x0 < tw or y1 - y0 < th:
+            return None, None
+        roi = self.img_frame_gray[y0:y1, x0:x1]
+
+        best = None
+        for tmpl_i, mask_i in ((tmpl, mask), (cv2.flip(tmpl, 1), cv2.flip(mask, 1))):
+            res = cv2.matchTemplate(roi, tmpl_i, cv2.TM_CCORR_NORMED, mask=mask_i)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if best is None or max_val > best["score"]:
+                best = {"score": float(max_val), "loc": (max_loc[0] + x0, max_loc[1] + y0)}
+
+        if best is None or best["score"] < match_threshold:
+            self.appearance_result = None
+            return None, None
+
+        offset = cfg.get("feet_offset", [0, -6])
+        feet = (
+            best["loc"][0] + tw // 2 + int(offset[0]),
+            best["loc"][1] + th + int(offset[1]),
+        )
+        self.appearance_result = {
+            "loc": best["loc"],
+            "size": (th, tw),
+            "score": best["score"],
+            "feet": feet,
+        }
+        return feet, best["score"]
+
+    def _apply_appearance_anchor(self):
+        """
+        Refine the player position with the character appearance.
+
+        When the 称号 is lost (position frozen) or locked onto another
+        character with the same title, the appearance match (unique to this
+        character) diverges from the title position — in that case we trust
+        the appearance.
+        """
+        cfg = self.cfg.get("appearance", {})
+        if not cfg.get("enable", False) or self.img_appearance_gray is None:
+            return
+        # Respect F12: when the user has frozen the box, do not override it.
+        if self._title_fixed:
+            return
+
+        self.appearance_override = False
+        feet, score = self._detect_player_by_appearance()
+        if feet is None:
+            return
+
+        gate_radius = float(cfg.get("gate_radius", 90))
+        px, py = self.loc_player
+        dist = ((feet[0] - px) ** 2 + (feet[1] - py) ** 2) ** 0.5
+
+        if dist > gate_radius:
+            self.appearance_override = True
+            logger.info(
+                f"[Appearance] Title diverged {dist:.0f}px → using appearance "
+                f"(score={score:.2f}) at {feet}"
+            )
+            self.loc_player = feet
 
     def _collect_title_candidates(self, img_roi, img_pat, max_candidates: int, score_threshold: float):
         """Collect multiple non-overlapping title candidates from a full-frame template match."""
@@ -1277,6 +1443,22 @@ class MonsterDetector:
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2
         )
 
+    def _draw_appearance_debug(self):
+        """Draw the appearance match box (magenta=overriding, yellow=agree)."""
+        if self.img_frame_debug is None or self.appearance_result is None:
+            return
+        ap = self.appearance_result
+        x, y = ap["loc"]
+        h, w = ap["size"]
+        color = (255, 0, 255) if self.appearance_override else (0, 255, 255)
+        draw_rectangle(
+            self.img_frame_debug,
+            (x, y), (h, w),
+            color,
+            f"AP {ap['score']:.2f}",
+            thickness=2, text_height=0.5,
+        )
+
     def _get_attack_facing(self) -> str:
         """Return left/right facing toward the nearest detected monster."""
         if not self.monsters:
@@ -1604,6 +1786,14 @@ class MonsterDetector:
                 f"Global: ({gx},{gy}) MM:({mx},{my}) PMM:{self.loc_player_minimap or '?'} Match:{getattr(self,'_last_match_score',1):.3f}",
                 f"Ladder: {self.is_on_ladder} | Map: {self.img_map.shape[1]}x{self.img_map.shape[0]}" if self.img_map is not None else "No map loaded",
             ]
+        if self.appearance_result is not None:
+            ap = self.appearance_result
+            ap_state = "OVERRIDE" if self.appearance_override else "OK"
+            texts.append(
+                f"Appear: {ap['score']:.2f} [{ap_state}] feet=({ap['feet'][0]},{ap['feet'][1]})"
+            )
+        else:
+            texts.append("Appear: no-match")
         texts += ["S=shot C/RClick=clear-title Q=quit F1=toggle"]
 
         # Bottom-left positioning (matches reference project)
@@ -1636,6 +1826,7 @@ class MonsterDetector:
             )
 
         self._draw_title_candidates()
+        self._draw_appearance_debug()
 
     # -------------------------------------------------------------------
     # Main processing loop
@@ -1736,6 +1927,10 @@ class MonsterDetector:
 
         # Detect player via title template matching
         self._detect_player_by_title()
+
+        # Refine with character appearance (handles title loss / same-title conflicts)
+        if self.cfg.get("appearance", {}).get("enable", False):
+            self._apply_appearance_anchor()
 
         # Compute search region (same formula for detection & display)
         margin = self.cfg["monster_detect"].get("search_box_margin", 50)

@@ -37,6 +37,10 @@ class HealthMonitor:
         self.mp_percent = 100.0
         self.exp_percent = 100.0
         self.t_last_valid_read = 0.0
+        # Warm-up guard: skip potion actions until bars have been read a few
+        # times, so a not-yet-rendered first frame (reads 0% and would trigger
+        # a spurious potion at startup) is ignored.
+        self._valid_read_count = 0
         # Edge-trigger latches: prevent repeated drinking while value stays low.
         self._hp_potion_latched = False
         self._mp_potion_latched = False
@@ -388,6 +392,7 @@ class HealthMonitor:
                     self.mp_percent = mp_pct
                     self.exp_percent = exp_pct
                     self.t_last_valid_read = t_cur
+                    self._valid_read_count += 1
 
                 hm_cfg = self.cfg.get("health_monitor", {})
                 hp_thres = hm_cfg.get("add_hp_percent", 50)
@@ -406,6 +411,14 @@ class HealthMonitor:
 
                 if not has_recent_read:
                     # No fresh bar read: skip potion actions to avoid stale values.
+                    self._limit_fps()
+                    continue
+
+                # Warm-up guard: ignore the first few valid reads so a blank /
+                # not-yet-rendered first frame (which reads 0% and would drink
+                # a potion at startup) is skipped.
+                warmup_reads = int(hm_cfg.get("warmup_reads", 10))
+                if self._valid_read_count < warmup_reads:
                     self._limit_fps()
                     continue
 
