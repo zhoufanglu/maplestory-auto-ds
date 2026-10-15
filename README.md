@@ -30,11 +30,13 @@ scales: [1]                    # 缩放比例，官方素材不匹配时改: [0.
   ```
 
 # 2、地图绘制
-TODO
+`
+.venv/Scripts/python.exe tools/routeRecorder.py --new_map mogushan --cfg custom
+`
 
 # 3、单独测试称号定位
 
-如果你只想验证 `character/title.png` 能不能定位到角色，不想直接跑完整挂机流程，可以先跑：
+如果你只想验证 `character/title.png` 能不能定位到角色，不想直接跑完整挂机流程，可以a先跑：aa
 
 ```powershell
 python .\test\test_title_locator.py

@@ -16,6 +16,7 @@ import time
 import glob
 import os
 import threading
+import traceback
 
 import cv2
 import numpy as np
@@ -55,6 +56,7 @@ class MonsterDetector:
 
         # Monster data
         self.monsters_info: dict = {}   # {name: [(img, mask), ...]}
+        self.monster_cfg: dict = {}     # {name: {diff_thres, scales, ...}}
         self.monsters: list = []        # Detected monsters in current frame
 
         # Frame data
@@ -80,6 +82,8 @@ class MonsterDetector:
         self.loc_minimap = (0, 0)
         self.img_minimap = None
         self.loc_player_minimap = None
+        self._dot_last_pos = None            # 上一次绿点位置（判断是否卡住）
+        self._dot_last_move_time = time.time()
 
         # Route following
         self.img_map = None             # Global stitched map (map.png)
@@ -95,6 +99,14 @@ class MonsterDetector:
         self.loc_minimap_global = (0, 0)
         self._last_pmm = None   # Last player minimap position (for displacement tracking)
         self.is_on_ladder = False
+        self._route_miss_frames = 0  # consecutive frames with no nearby route color
+
+        # Stuck recovery (walk left when the character hasn't moved for a while)
+        self._stuck_last_pos = None
+        self._stuck_last_move_time = time.time()
+        self._unstick_until = 0.0
+        self._unstick_dir = "left"
+        self._last_walk_dir = "left"   # 最后一次实际移动的方向（卡住反方向用）
         self._kb = None  # Keyboard controller (set externally)
         self.health_monitor = None  # Health monitor (initialized in start())
 
@@ -150,7 +162,18 @@ class MonsterDetector:
 
         # Debug state for the appearance anchor (drawn on the overlay).
         self.appearance_result = None    # {"loc","size","score","feet"}
+        self.appearance_score = None     # 外观匹配分（0~1），始终显示用
         self.appearance_override = False
+        self._appearance_last_pos = None   # appearance's own tracked feet position
+        self._appearance_last_seen_frame = -1  # last frame appearance matched confidently
+        self.title_sim = None   # last title match similarity (0~1), for display
+
+        # Manual minimap selection (drag a box in the display window to calibrate).
+        self._minimap_select_mode = False
+        self._mm_drag_start = None      # display-space (x, y)
+        self._mm_drag_end = None        # display-space (x, y)
+        self._mm_hover = None           # display-space (x, y) — for the magnifier
+        self._manual_minimap_rect = None   # full-frame (x, y, w, h)
 
         # Timers
         self.t_last_frame = time.time()
@@ -190,13 +213,24 @@ class MonsterDetector:
         Returns:
             True if at least one monster was loaded successfully.
         """
-        # Load specified monsters from config, or scan all directories
+        # Load specified monsters from config, or scan all directories.
+        # monsters can be:
+        #   - dict: {name: {diff_thres, scales, ...}}  (per-monster config)
+        #   - list: [name, ...]                        (all use global defaults)
         specified = self.cfg["monster_detect"].get("monsters", [])
-        if specified:
-            monster_dirs = [os.path.join("monster", m) for m in specified
+        self.monster_cfg = {}
+        if isinstance(specified, dict):
+            monster_names = list(specified.keys())
+            for name, m_cfg in specified.items():
+                self.monster_cfg[name] = m_cfg if isinstance(m_cfg, dict) else {}
+        else:
+            monster_names = list(specified)
+
+        if monster_names:
+            monster_dirs = [os.path.join("monster", m) for m in monster_names
                             if os.path.isdir(os.path.join("monster", m))]
             if not monster_dirs:
-                logger.error(f"Specified monster dirs not found: {specified}")
+                logger.error(f"Specified monster dirs not found: {monster_names}")
                 return False
         else:
             monster_dirs = [d for d in glob.glob("monster/*") if os.path.isdir(d)]
@@ -438,11 +472,15 @@ class MonsterDetector:
         Uses multi-scale matching and returns best matches.
         """
         monsters = []
-        diff_thres = self.cfg["monster_detect"]["diff_thres"]
+        m_cfg = self.monster_cfg.get(monster_name, {})
+        try:
+            diff_thres = float(m_cfg.get("diff_thres", self.cfg["monster_detect"]["diff_thres"]))
+        except (TypeError, ValueError):
+            diff_thres = float(self.cfg["monster_detect"].get("diff_thres", 0.3))
         h, w = img_monster.shape[:2]
 
-        # Multi-scale matching (configured via monster_detect.scales)
-        scales = self.cfg["monster_detect"].get("scales", [1.0])
+        # Multi-scale matching (per-monster scales override the global default)
+        scales = m_cfg.get("scales", self.cfg["monster_detect"].get("scales", [1.0]))
 
         for scale in scales:
             if scale == 1.0:
@@ -491,7 +529,10 @@ class MonsterDetector:
 
             # Collect matches below threshold
             match_locations = np.where(res <= diff_thres)
-            min_spread = float(self.cfg["monster_detect"].get("min_color_spread", 30))
+            min_spread = float(m_cfg.get(
+                "min_color_spread",
+                self.cfg["monster_detect"].get("min_color_spread", 30)
+            ))
             count = 0
             for pt in zip(*match_locations[::-1]):
                 if count >= 50:
@@ -684,14 +725,16 @@ class MonsterDetector:
         Returns:
             (loc_player_feet, score) or (None, None) if no confident match.
         """
-        if self.img_appearance_gray is None or self.img_frame_gray is None:
+        if self.img_appearance is None or self.img_frame is None:
             return None, None
 
         cfg = self.cfg.get("appearance", {})
-        tmpl = self.img_appearance_gray
+        # Match in COLOR (BGR), not grayscale — the character's color (e.g. blue
+        # robe) is a strong distinguishing feature that grayscale discards.
+        tmpl = self.img_appearance
         mask = self.img_appearance_mask
         th, tw = tmpl.shape[:2]
-        fh, fw = self.img_frame_gray.shape[:2]
+        fh, fw = self.img_frame.shape[:2]
         if th > fh or tw > fw:
             return None, None
 
@@ -700,11 +743,16 @@ class MonsterDetector:
         match_threshold = float(cfg.get("match_threshold", 0.62))
 
         anchor = self.loc_player
-        if anchor == (0, 0):
+        if self._appearance_last_pos is not None:
+            # Appearance is primary: search around its OWN last position,
+            # NOT around the title — so a wrong title can't drag it off.
+            anchor = self._appearance_last_pos
+            radius = search_radius
+        else:
+            # No appearance history yet: search around screen center
+            # (camera follows the player), independent of the title.
             anchor = (fw // 2, fh // 2)
             radius = center_radius
-        else:
-            radius = search_radius
 
         x0 = max(0, anchor[0] - radius)
         y0 = max(0, anchor[1] - radius)
@@ -712,7 +760,7 @@ class MonsterDetector:
         y1 = min(fh, anchor[1] + radius + th)
         if x1 - x0 < tw or y1 - y0 < th:
             return None, None
-        roi = self.img_frame_gray[y0:y1, x0:x1]
+        roi = self.img_frame[y0:y1, x0:x1]
 
         best = None
         for tmpl_i, mask_i in ((tmpl, mask), (cv2.flip(tmpl, 1), cv2.flip(mask, 1))):
@@ -721,7 +769,17 @@ class MonsterDetector:
             if best is None or max_val > best["score"]:
                 best = {"score": float(max_val), "loc": (max_loc[0] + x0, max_loc[1] + y0)}
 
-        if best is None or best["score"] < match_threshold:
+        if best is None:
+            self.appearance_result = None
+            self.appearance_score = None
+            return None, None
+
+        # 始终记录外观匹配分（右下角显示用）。
+        self.appearance_score = float(best["score"])
+
+        # 纯分数阈值：>= match_threshold 用外观定位，< 用称号。
+        score_threshold = float(cfg.get("match_threshold", 0.85))
+        if best["score"] < score_threshold:
             self.appearance_result = None
             return None, None
 
@@ -736,19 +794,18 @@ class MonsterDetector:
             "score": best["score"],
             "feet": feet,
         }
+        self._appearance_last_pos = feet
         return feet, best["score"]
 
     def _apply_appearance_anchor(self):
         """
-        Refine the player position with the character appearance.
+        Appearance is the PRIMARY anchor; title is the fallback.
 
-        When the 称号 is lost (position frozen) or locked onto another
-        character with the same title, the appearance match (unique to this
-        character) diverges from the title position — in that case we trust
-        the appearance.
+        When the appearance matches confidently, use its position; otherwise
+        keep the title-derived position (set by _detect_player_by_title).
         """
         cfg = self.cfg.get("appearance", {})
-        if not cfg.get("enable", False) or self.img_appearance_gray is None:
+        if not cfg.get("enable", False) or self.img_appearance is None:
             return
         # Respect F12: when the user has frozen the box, do not override it.
         if self._title_fixed:
@@ -757,19 +814,19 @@ class MonsterDetector:
         self.appearance_override = False
         feet, score = self._detect_player_by_appearance()
         if feet is None:
+            # 外观匹配不到（分数 < 阈值）：立即回退称号（_detect_player_by_title 已设置 loc_player）。
+            if self.frame_count % 30 == 0:
+                logger.info(
+                    f"[Appearance] FAILED ap_score={getattr(self, 'appearance_score', None)} → 回退称号"
+                )
             return
 
-        gate_radius = float(cfg.get("gate_radius", 90))
-        px, py = self.loc_player
-        dist = ((feet[0] - px) ** 2 + (feet[1] - py) ** 2) ** 0.5
-
-        if dist > gate_radius:
-            self.appearance_override = True
+        self.appearance_override = True
+        self.loc_player = feet
+        if self.frame_count % 30 == 0:
             logger.info(
-                f"[Appearance] Title diverged {dist:.0f}px → using appearance "
-                f"(score={score:.2f}) at {feet}"
+                f"[Appearance] Using appearance at {feet} (score={score:.2f})"
             )
-            self.loc_player = feet
 
     def _collect_title_candidates(self, img_roi, img_pat, max_candidates: int, score_threshold: float):
         """Collect multiple non-overlapping title candidates from a full-frame template match."""
@@ -874,14 +931,16 @@ class MonsterDetector:
         for cand in candidates:
             x, y, w, h = cand["box"]
             color = (0, 255, 0) if cand.get("selected") else (0, 255, 255)
-            label = f"T{cand['idx']}:{cand['score']:.2f}"
+            # 称号用的是 SQDIFF（0=完美，越小越好），转成 0~1 相似度（越大越好），跟外观一致。
+            sim = max(0.0, min(1.0, 1.0 - cand['score']))
+            label = f"T{cand['idx']}:{sim:.2f}"
             cv2.rectangle(self.img_frame_debug, (x, y), (x + w, y + h), color, 2)
             cv2.putText(
                 self.img_frame_debug,
                 label,
                 (x, max(15, y - 6)),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                0.85,
                 color,
                 2,
                 cv2.LINE_AA,
@@ -945,6 +1004,7 @@ class MonsterDetector:
         prev_search_radius = int(title_cfg.get("prev_search_radius", 220))
         stick_to_prev_margin = float(title_cfg.get("stick_to_prev_margin", 0.02))
         strong_match_threshold = float(title_cfg.get("strong_match_threshold", max(0.03, match_threshold * 0.35)))
+        super_strong_threshold = float(title_cfg.get("super_strong_threshold", 0.01))
         top_k = max(1, int(title_cfg.get("top_k", 12)))
         manual_select = bool(title_cfg.get("manual_select", True))
         max_candidates = max(1, int(title_cfg.get("max_candidates", 6)))
@@ -1022,7 +1082,8 @@ class MonsterDetector:
                 gy = y + y_off
                 dist = ((gx - anchor[0]) ** 2 + (gy - anchor[1]) ** 2) ** 0.5 / diag
                 cost = score + bias_weight * dist
-                if best is None or cost < best["cost"]:
+                # 默认选相似度最高（SQDIFF score 最小）的候选，不做距离偏置。
+                if best is None or score < best["score"]:
                     best = {
                         "loc": (gx, gy),
                         "score": score,
@@ -1043,6 +1104,11 @@ class MonsterDetector:
                 score_threshold=candidate_threshold,
             )
             self._update_title_candidates_snapshot(candidate_pool, (tw, th))
+            # 始终记录称号最佳匹配相似度（右下角显示用）。
+            self.title_sim = (
+                max(0.0, min(1.0, 1.0 - candidate_pool[0]["score"]))
+                if candidate_pool else None
+            )
 
             with self._title_state_lock:
                 if self._pending_title_select_loc is not None:
@@ -1141,6 +1207,21 @@ class MonsterDetector:
                     global_cand["jump_px"] = 0.0
                     candidates.append(global_cand)
 
+            # 把全屏候选也纳入最终选择（candidate_pool 已按相似度从高到低），
+            # 保证「相似度最高」的全屏匹配能被选到，即使它离屏幕中心较远。
+            if not manual_locked:
+                for cp in candidate_pool:
+                    cx, cy = cp["loc"]
+                    candidates.append({
+                        "loc": (cx, cy),
+                        "score": cp["score"],
+                        "cost": cp["score"],
+                        "center_dist_px": ((cx - center_anchor[0]) ** 2 + (cy - center_anchor[1]) ** 2) ** 0.5,
+                        "jump_px": (((cx - self.loc_title[0]) ** 2 + (cy - self.loc_title[1]) ** 2) ** 0.5
+                                     if self.loc_title is not None else 0.0),
+                        "src": "pool",
+                    })
+
             if not manual_locked and not candidates:
                 self._fallback_player_location()
                 return
@@ -1170,26 +1251,8 @@ class MonsterDetector:
                         self._fallback_player_location()
                         return
 
-                    prev_good = next(
-                        (c for c in filtered
-                         if c.get("src") == "prev" and c["score"] < match_threshold),
-                        None,
-                    )
-                    best_other = min(
-                        [c for c in filtered if c.get("src") != "prev"],
-                        key=lambda c: c["cost"],
-                        default=None,
-                    )
-
-                    if prev_good is not None:
-                        if (best_other is None
-                                or best_other["score"] >= strong_match_threshold
-                                or best_other["score"] + stick_to_prev_margin >= prev_good["score"]):
-                            best = prev_good
-                        else:
-                            best = best_other
-                    else:
-                        best = min(filtered, key=lambda c: c["cost"])
+                    # 默认定位：识别率最高（SQDIFF score 最小，即相似度最高）的候选。
+                    best = min(filtered, key=lambda c: c["score"])
 
                     loc = best["loc"]
                     score = best["score"]
@@ -1224,6 +1287,7 @@ class MonsterDetector:
                     loc = self.loc_title
             self.loc_title = loc
             self._title_last_seen_frame = self.frame_count
+            self.title_sim = max(0.0, min(1.0, 1.0 - score))
             if 'candidate_pool' in locals() and 'tw' in locals() and 'th' in locals():
                 self._update_title_candidates_snapshot(candidate_pool, (tw, th))
             tw, th = self.img_title.shape[1], self.img_title.shape[0]
@@ -1235,7 +1299,7 @@ class MonsterDetector:
                 draw_rectangle(
                     self.img_frame_debug,
                     loc, (th, tw), (255, 0, 0),
-                    f"TITLE {score:.2f}", thickness=3, text_height=0.7
+                    f"TITLE {self.title_sim:.2f}", thickness=3, text_height=1.0
                 )
         elif self.loc_title is None:
             self._fallback_player_location()
@@ -1244,7 +1308,24 @@ class MonsterDetector:
         """
         Detect minimap via white border (reference project pattern).
         Falls back to config if detection fails.
+
+        When minimap.fixed is true, skip auto-detection and always use the
+        manually-calibrated config coordinates. This is the more reliable
+        choice when the game window size/position never changes (the minimap
+        sits at a fixed pixel location).
         """
+        # Manual drag-selection (real-time calibration) has the highest priority.
+        if self._manual_minimap_rect is not None:
+            return self._manual_minimap_rect
+
+        mm_cfg = self.cfg.get("minimap", {})
+
+        # Fixed mode: trust the calibrated coordinates (no auto-detect drift).
+        if mm_cfg.get("fixed", False):
+            if mm_cfg.get("width", 0) > 10 and mm_cfg.get("height", 0) > 10:
+                return (mm_cfg["x"], mm_cfg["y"], mm_cfg["width"], mm_cfg["height"])
+            return None
+
         # Try auto-detection first (white border method)
         result = get_minimap_loc_size(self.img_frame)
         if result:
@@ -1257,10 +1338,125 @@ class MonsterDetector:
                 return (x_i, y_i, w_i, h_i)
 
         # Fallback to config
-        mm_cfg = self.cfg.get("minimap", {})
         if mm_cfg.get("width", 0) > 10 and mm_cfg.get("height", 0) > 10:
             return (mm_cfg["x"], mm_cfg["y"], mm_cfg["width"], mm_cfg["height"])
         return None
+
+    def toggle_minimap_select(self):
+        """Toggle the drag-to-select minimap mode (for real-time calibration)."""
+        self._minimap_select_mode = not self._minimap_select_mode
+        self._mm_drag_start = None
+        self._mm_drag_end = None
+        self._mm_hover = None
+        logger.info(f"[Minimap] Select mode {'ON' if self._minimap_select_mode else 'OFF'}")
+        return self._minimap_select_mode
+
+    def minimap_select_mouse(self, event, display_x, display_y, flags, param):
+        """
+        Handle drag-to-select for the minimap. Coordinates are display-space
+        (scaled by display_scale); we convert back to full-frame on release.
+        Also tracks the hover position for the magnifier.
+        """
+        if not self._minimap_select_mode:
+            return
+        if event == cv2.EVENT_MOUSEMOVE:
+            self._mm_hover = (display_x, display_y)
+            if self._mm_drag_start is not None:
+                self._mm_drag_end = (display_x, display_y)
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            self._mm_drag_start = (display_x, display_y)
+            self._mm_drag_end = (display_x, display_y)
+        elif event == cv2.EVENT_LBUTTONUP and self._mm_drag_start is not None:
+            scale = float(self.cfg.get("monster_detect", {}).get("display_scale", 0.55))
+            scale = max(scale, 0.01)
+            x0 = int(round(min(self._mm_drag_start[0], display_x) / scale))
+            y0 = int(round(min(self._mm_drag_start[1], display_y) / scale))
+            x1 = int(round(max(self._mm_drag_start[0], display_x) / scale))
+            y1 = int(round(max(self._mm_drag_start[1], display_y) / scale))
+            w, h = x1 - x0, y1 - y0
+            if w > 5 and h > 5:
+                self._manual_minimap_rect = (x0, y0, w, h)
+                logger.info(
+                    f"[Minimap] Selected rect: x={x0} y={y0} width={w} height={h}"
+                )
+                logger.info(
+                    f"[Minimap] → 写进 config:  x: {x0}, y: {y0}, width: {w}, height: {h}"
+                )
+            self._mm_drag_start = None
+            self._mm_drag_end = None
+
+    def _draw_minimap_magnifier(self):
+        """
+        Draw a zoomed view of the area around the mouse cursor in the top-right
+        corner, so the minimap border can be selected pixel-precisely.
+        """
+        if self.img_frame_debug is None:
+            return
+        if not self._minimap_select_mode or self._mm_hover is None:
+            return
+
+        scale = float(self.cfg.get("monster_detect", {}).get("display_scale", 0.55))
+        scale = max(scale, 0.01)
+        cx = int(round(self._mm_hover[0] / scale))
+        cy = int(round(self._mm_hover[1] / scale))
+
+        fh, fw = self.img_frame.shape[:2]
+        crop_half = 50       # full-frame px each side → 100x100 window
+        zoom = 3
+        x0 = max(0, cx - crop_half)
+        y0 = max(0, cy - crop_half)
+        x1 = min(fw, cx + crop_half)
+        y1 = min(fh, cy + crop_half)
+        if x1 - x0 < 10 or y1 - y0 < 10:
+            return
+
+        crop = self.img_frame[y0:y1, x0:x1]
+        crop = cv2.resize(crop, (crop.shape[1] * zoom, crop.shape[0] * zoom),
+                          interpolation=cv2.INTER_NEAREST)
+        ch, cw = crop.shape[:2]
+
+        px_paste = fw - cw - 10
+        py_paste = 10
+        if not (py_paste >= 0 and px_paste >= 0
+                and py_paste + ch <= fh and px_paste + cw <= fw):
+            return
+        self.img_frame_debug[py_paste:py_paste + ch, px_paste:px_paste + cw] = crop
+        cv2.rectangle(self.img_frame_debug, (px_paste, py_paste),
+                      (px_paste + cw, py_paste + ch), (255, 255, 255), 2)
+
+        # Short thick crosshair centered on the cursor pixel (accounting for edge clamping).
+        cxx = px_paste + int((cx - x0) * zoom)
+        cyy = py_paste + int((cy - y0) * zoom)
+        arm = 12
+        cross_color = (0, 0, 255)  # 红色
+        cv2.line(self.img_frame_debug, (cxx - arm, cyy), (cxx + arm, cyy), cross_color, 3)
+        cv2.line(self.img_frame_debug, (cxx, cyy - arm), (cxx, cyy + arm), cross_color, 3)
+        cv2.circle(self.img_frame_debug, (cxx, cyy), 2, cross_color, -1)
+
+    def _draw_minimap_selection(self):
+        """Draw the manual minimap selection (and in-progress drag) on the debug frame."""
+        if self.img_frame_debug is None:
+            return
+        scale = float(self.cfg.get("monster_detect", {}).get("display_scale", 0.55))
+        scale = max(scale, 0.01)
+
+        # In-progress drag rectangle (display-space → full-frame).
+        if (self._minimap_select_mode
+                and self._mm_drag_start is not None
+                and self._mm_drag_end is not None):
+            x0 = int(round(min(self._mm_drag_start[0], self._mm_drag_end[0]) / scale))
+            y0 = int(round(min(self._mm_drag_start[1], self._mm_drag_end[1]) / scale))
+            x1 = int(round(max(self._mm_drag_start[0], self._mm_drag_end[0]) / scale))
+            y1 = int(round(max(self._mm_drag_start[1], self._mm_drag_end[1]) / scale))
+            cv2.rectangle(self.img_frame_debug, (x0, y0), (x1, y1), (255, 0, 255), 2)
+
+        # Confirmed manual rect.
+        if self._manual_minimap_rect is not None:
+            x, y, w, h = self._manual_minimap_rect
+            draw_rectangle(
+                self.img_frame_debug, (x, y), (h, w),
+                (255, 0, 255), "MM manual", thickness=2, text_height=0.5,
+            )
 
     # -------------------------------------------------------------------
     # Route following
@@ -1404,29 +1600,45 @@ class MonsterDetector:
         self._select_best_route()
         nearest, nearest_ud = self.get_nearest_route_color()
 
-        if nearest and nearest_ud:
-            if nearest["distance"] < nearest_ud["distance"]:
+        if nearest or nearest_ud:
+            # Found a route color → reset the miss counter.
+            self._route_miss_frames = 0
+            comp_dist = int(self.cfg.get("route", {}).get("climb_complement_dist", 3))
+            if nearest and nearest_ud:
+                if nearest["distance"] < nearest_ud["distance"]:
+                    self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest["command"].split()
+                    _, cmd, _ = nearest_ud["command"].split()
+                    # 已上梯子 → 补垂直方向，保证爬梯流畅；
+                    # 横向跳跃且附近是「向上爬」→ 跳的同时按住 up，抓住绳子。
+                    # 仅当另一颜色紧邻(距离<=comp_dist)才互补，避免把远处无关方向注入。
+                    if self.cmd_move_y == "none" and nearest_ud["distance"] <= comp_dist and (
+                        self.is_on_ladder or (self.cmd_action == "jump" and cmd == "up")
+                    ):
+                        self.cmd_move_y = cmd
+                else:
+                    self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest_ud["command"].split()
+                    cmd, _, _ = nearest["command"].split()
+                    # 竖直爬梯时不要被远处横向颜色带偏方向；只有紧邻的横向才互补。
+                    if self.cmd_move_x == "none" and self.is_on_ladder and nearest["distance"] <= comp_dist:
+                        self.cmd_move_x = cmd
+            elif nearest:
                 self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest["command"].split()
-                _, cmd, _ = nearest_ud["command"].split()
-                if self.cmd_move_y == "none" and self.is_on_ladder:
-                    self.cmd_move_y = cmd
             else:
                 self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest_ud["command"].split()
-                cmd, _, _ = nearest["command"].split()
-                if self.cmd_move_x == "none" and self.is_on_ladder:
-                    self.cmd_move_x = cmd
-        elif nearest:
-            self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest["command"].split()
-        elif nearest_ud:
-            self.cmd_move_x, self.cmd_move_y, self.cmd_action = nearest_ud["command"].split()
         else:
-            self.cmd_move_x, self.cmd_move_y, self.cmd_action = "none", "none", "none"
+            # No route color nearby: keep the last movement for a short grace
+            # period to bridge small gaps in the recorded route, then stop.
+            self._route_miss_frames += 1
+            grace = int(self.cfg.get("route", {}).get("miss_grace_frames", 15))
+            if self._route_miss_frames > grace:
+                self.cmd_move_x, self.cmd_move_y, self.cmd_action = "none", "none", "none"
 
         # Goal → cycle to next route
         if self.cmd_action == "goal" and self.img_routes:
             self.idx_routes = (self.idx_routes + 1) % len(self.img_routes)
             self.img_route = self.img_routes[self.idx_routes]
-            logger.info(f"[Route] Goal reached → route {self.idx_routes + 1}/{len(self.img_routes)}")
+            if self.frame_count % 30 == 0:
+                logger.info(f"[Route] Goal reached → route {self.idx_routes + 1}/{len(self.img_routes)}")
 
     def _draw_player_marker(self):
         """Draw the player position marker on the debug frame."""
@@ -1444,19 +1656,18 @@ class MonsterDetector:
         )
 
     def _draw_appearance_debug(self):
-        """Draw the appearance match box (magenta=overriding, yellow=agree)."""
+        """Draw the appearance match box (magenta = primary anchor active)."""
         if self.img_frame_debug is None or self.appearance_result is None:
             return
         ap = self.appearance_result
         x, y = ap["loc"]
         h, w = ap["size"]
-        color = (255, 0, 255) if self.appearance_override else (0, 255, 255)
         draw_rectangle(
             self.img_frame_debug,
             (x, y), (h, w),
-            color,
+            (255, 0, 255),
             f"AP {ap['score']:.2f}",
-            thickness=2, text_height=0.5,
+            thickness=3, text_height=1.0,
         )
 
     def _get_attack_facing(self) -> str:
@@ -1478,9 +1689,12 @@ class MonsterDetector:
             return "none"
 
         deadzone = int(self.cfg.get("directional_attack", {}).get("face_deadzone_px", 8))
-        if abs(nearest_dx) <= deadzone:
-            return "none"
-        return "right" if nearest_dx > 0 else "left"
+        facing = "none" if abs(nearest_dx) <= deadzone else ("right" if nearest_dx > 0 else "left")
+        if self.frame_count % 30 == 0:
+            logger.info(
+                f"[Face] player_x={px} monster_x={px + nearest_dx} dx={nearest_dx} → {facing}"
+            )
+        return facing
 
     def _reset_hunt_search_state(self):
         """Reset no-monster search state once a target is found."""
@@ -1788,12 +2002,11 @@ class MonsterDetector:
             ]
         if self.appearance_result is not None:
             ap = self.appearance_result
-            ap_state = "OVERRIDE" if self.appearance_override else "OK"
             texts.append(
-                f"Appear: {ap['score']:.2f} [{ap_state}] feet=({ap['feet'][0]},{ap['feet'][1]})"
+                f"Appear(主): {ap['score']:.2f} feet=({ap['feet'][0]},{ap['feet'][1]})"
             )
         else:
-            texts.append("Appear: no-match")
+            texts.append("Appear: 丢失(用称号)")
         texts += ["S=shot C/RClick=clear-title Q=quit F1=toggle"]
 
         # Bottom-left positioning (matches reference project)
@@ -1814,6 +2027,30 @@ class MonsterDetector:
                 (x, y),
                 cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), 2, cv2.LINE_AA
             )
+
+        # --- Appearance / Title match scores (bottom-right) ---
+        ap_score = getattr(self, "appearance_score", None)
+        t_sim = getattr(self, "title_sim", None)
+        ap_used = bool(getattr(self, "appearance_override", False))
+        ap_txt = f"AP: {ap_score:.2f}" if ap_score is not None else "AP: N/A"
+        title_txt = f"Title: {t_sim:.2f}" if t_sim is not None else "Title: N/A"
+        score_rows = [
+            (f"{ap_txt} {'[v]' if ap_used else '[x]'}", (255, 0, 255)),
+            (f"{title_txt} {'[x]' if ap_used else '[v]'}", (0, 0, 255)),
+        ]
+        fw2 = self.img_frame.shape[1]
+        fh2 = self.img_frame.shape[0]
+        for i, (text, color) in enumerate(score_rows):
+            (tw2, th2), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            x2 = fw2 - tw2 - 12
+            y2 = fh2 - 12 - 26 * (len(score_rows) - 1 - i)
+            cv2.rectangle(self.img_frame_debug,
+                          (x2 - 4, y2 - th2 - 4),
+                          (x2 + tw2 + 4, y2 + 4),
+                          (0, 0, 0), -1)
+            cv2.putText(self.img_frame_debug, text,
+                        (x2, y2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
         # Monster count in top-right corner (big text, eye-catching)
         if self.monsters:
@@ -1877,30 +2114,59 @@ class MonsterDetector:
                     f"frame=({fw}x{fh})"
                 )
 
+            # 绿点卡住超时重定位：超过 dot_stuck_seconds 没动，重置重新定位。
+            stuck_seconds = float(self.cfg.get("minimap", {}).get("dot_stuck_seconds", 3.0))
+            if (stuck_seconds > 0
+                    and self.loc_player_minimap is not None
+                    and time.time() - self._dot_last_move_time >= stuck_seconds):
+                logger.info("[Dot] 绿点卡住超时，重置重新定位")
+                self.loc_player_minimap = None
+                self._dot_last_pos = None
+                self._dot_last_move_time = time.time()
+
             # Find player dot — connected components approach
-            # Player dot is a small compact cluster; terrain yellow is large/scattered
+            # Player dot is a small compact cluster; terrain yellow is large/scattered.
+            # Prefer the candidate CLOSEST to the last known position: the player dot
+            # moves, static terrain doesn't, so "closest" tracks the player reliably.
             if self.img_minimap is not None and self.img_minimap.size > 0:
                 player_color = self.cfg.get("minimap", {}).get("player_color", (136, 255, 255))
                 base_tol = self.cfg.get("minimap", {}).get("player_tolerance", 15)
+                candidates = []
                 for tol in [base_tol, base_tol + 10, base_tol + 20, base_tol + 30]:
                     lower = tuple(max(0, c - tol) for c in player_color)
                     upper = tuple(min(255, c + tol) for c in player_color)
                     mask = cv2.inRange(self.img_minimap, lower, upper)
-                    # Find connected components, pick the best one (not terrain blob)
                     num_lbl, lbl, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
-                    best = None
-                    best_score = -1
                     for i in range(1, num_lbl):
                         area = stats[i, cv2.CC_STAT_AREA]
-                        # Player dot: 3-15 pixels, compact
-                        if 3 <= area <= 15:
-                            # Prefer larger clusters (more confident match)
-                            if area > best_score:
-                                best_score = area
-                                best = centroids[i]
-                    if best is not None:
-                        self.loc_player_minimap = (int(round(best[0])), int(round(best[1])))
+                        # Player dot: compact cluster（放宽上限，适配较大尺寸的小地图）
+                        if 2 <= area <= 50:
+                            cx, cy = centroids[i]
+                            dist = 0
+                            if self.loc_player_minimap is not None:
+                                dist = abs(cx - self.loc_player_minimap[0]) + abs(cy - self.loc_player_minimap[1])
+                            candidates.append((dist, area, (int(round(cx)), int(round(cy)))))
+                    if candidates:
                         break
+                if candidates:
+                    # 离上次位置最近的优先；距离相同时选面积更大的。
+                    candidates.sort(key=lambda x: (x[0], -x[1]))
+                    cx, cy = candidates[0][2]
+                    max_jump = int(self.cfg.get("minimap", {}).get("player_max_jump_px", 30))
+                    if self.loc_player_minimap is not None:
+                        jump = abs(cx - self.loc_player_minimap[0]) + abs(cy - self.loc_player_minimap[1])
+                        # <=0 表示不做跳变限制
+                        if max_jump <= 0 or jump <= max_jump:
+                            self.loc_player_minimap = (cx, cy)
+                    else:
+                        self.loc_player_minimap = (cx, cy)
+                    # 记录绿点是否移动（卡住超时重定位用）。
+                    if self.loc_player_minimap != self._dot_last_pos:
+                        self._dot_last_pos = self.loc_player_minimap
+                        self._dot_last_move_time = time.time()
+                    if self.frame_count % 30 == 0:
+                        cand_str = [(round(a), round(x), round(y)) for d, a, (x, y) in candidates[:5]]
+                        logger.info(f"[Dot] picked=({cx},{cy}) prev={self.loc_player_minimap} cands={cand_str}")
 
             # Global positioning (layer 3)
             if self.cfg["bot"].get("enable_route") and self.img_map is not None:
@@ -1981,9 +2247,12 @@ class MonsterDetector:
             attack_in_place = bool(
                 self.cfg.get("directional_attack", {}).get("attack_in_place", False)
             )
+            follow_route = bool(
+                self.cfg["bot"].get("enable_route") and self.img_route is not None
+            )
 
-            if mode == "hunt" and attack_in_place:
-                # 原地攻击 + 定期左右走动（防攻击失效）
+            if mode == "hunt" and attack_in_place and not follow_route:
+                # 原地攻击 + 定期左右走动（防攻击失效）——仅在不跟路线时
                 self._reset_hunt_search_state()
                 move_x, move_y, action = self._get_in_place_command()
             elif mode == "hunt" and self.monsters:
@@ -1996,18 +2265,61 @@ class MonsterDetector:
                 if attack_style == "directional":
                     facing = self._get_attack_facing()
                     if facing in ("left", "right"):
-                        move_x = f"face_{facing}"
-                        # When fighting on flat ground, ignore route horizontal drift.
+                        # 按住方向键朝怪物走（走动能可靠地让角色面向怪物），
+                        # 而不是轻点转身（轻点有时被攻击动画吞掉，导致打反方向）。
+                        move_x = facing
                         if not self.is_on_ladder:
                             move_y = "none"
                     elif route_move_x in ("left", "right") and self.is_on_ladder:
                         move_x = route_move_x
-            elif mode == "hunt":
+                    else:
+                        # 怪物已在攻击范围内（deadzone 内）：停下攻击，不跟路线漂。
+                        if not self.is_on_ladder:
+                            move_x = "none"
+            elif mode == "hunt" and not follow_route:
+                # 没路线时才左右搜索找怪
                 self._hunt_no_monster_frames += 1
                 if attack_style == "directional":
                     search_x, search_y, search_action = self._get_hunt_search_command()
                     if search_x != "none" or search_y != "none" or search_action != "none":
                         move_x, move_y, action = search_x, search_y, search_action
+
+            # 记录最后一次实际移动的方向（卡住反方向用）。
+            if move_x in ("left", "face_left"):
+                self._last_walk_dir = "left"
+            elif move_x in ("right", "face_right"):
+                self._last_walk_dir = "right"
+
+            # 卡墙角/卡住恢复：原地没动超时 → 反方向走2秒脱困。
+            # 跟路线用全局坐标；无路线(找怪)用小地图坐标判断是否卡住。
+            now = time.time()
+            scfg = self.cfg.get("stuck_recovery", {})
+            if scfg.get("enable", True):
+                if follow_route:
+                    cur_pos = self.loc_player_global
+                elif self.loc_player_minimap is not None:
+                    cur_pos = (float(self.loc_player_minimap[0]), float(self.loc_player_minimap[1]))
+                else:
+                    cur_pos = None
+
+                if cur_pos is not None and cur_pos != (0.0, 0.0):
+                    if self._stuck_last_pos is not None and self._stuck_last_pos != (0.0, 0.0):
+                        moved = abs(cur_pos[0] - self._stuck_last_pos[0]) + abs(cur_pos[1] - self._stuck_last_pos[1])
+                        if moved >= 1.0:
+                            self._stuck_last_move_time = now
+                    self._stuck_last_pos = cur_pos
+
+                    if (not self.monsters
+                            and now - self._stuck_last_move_time >= float(scfg.get("timeout_seconds", 3.0))):
+                        # 反方向：跟最后一次实际移动方向相反。
+                        unstick_dir = "right" if self._last_walk_dir == "left" else "left"
+                        self._unstick_until = now + float(scfg.get("unstick_seconds", 2.0))
+                        self._unstick_dir = unstick_dir
+                        self._stuck_last_move_time = now
+                        logger.info(f"[Stuck] 卡住超时 → 往{unstick_dir}走2秒")
+
+            if time.time() < self._unstick_until:
+                move_x, move_y, action = self._unstick_dir, "none", "none"
 
             if mode == "hunt" and self.frame_count % 30 == 0:
                 logger.info(
@@ -2066,19 +2378,29 @@ class MonsterDetector:
                     fh, fw = self.img_frame_debug.shape[:2]
                     px_paste = fw - cw - 10
                     py_paste = 10
-                    self.img_frame_debug[py_paste:py_paste + ch, px_paste:px_paste + cw] = crop
-                    cv2.rectangle(self.img_frame_debug, (px_paste, py_paste),
-                                  (px_paste + cw, py_paste + ch), (255, 255, 255), 2)
+                    if (py_paste >= 0 and px_paste >= 0
+                            and py_paste + ch <= fh and px_paste + cw <= fw):
+                        self.img_frame_debug[py_paste:py_paste + ch, px_paste:px_paste + cw] = crop
+                        cv2.rectangle(self.img_frame_debug, (px_paste, py_paste),
+                                      (px_paste + cw, py_paste + ch), (255, 255, 255), 2)
 
             self._draw_player_marker()          # Player dot
+            self._draw_minimap_selection()      # Manual minimap drag-select box
+            self._draw_minimap_magnifier()      # Zoomed cursor view (select mode)
             for monster in self.monsters:       # Monster boxes (top layer)
-                color = (0, 255, 255) if monster["name"] == "Health Bar" else (0, 255, 0)
+                if monster["name"] == "Health Bar":
+                    color = (0, 255, 255)
+                    sim = 1.0
+                else:
+                    color = (42, 42, 165)  # 棕色
+                    # 怪物用 SQDIFF（0=完美，越小越好），转成 0~1 相似度（越大越好）。
+                    sim = max(0.0, min(1.0, 1.0 - monster['score']))
                 draw_rectangle(
                     self.img_frame_debug,
                     monster["position"], monster["size"],
                     color,
-                    f"{monster['name']}:{monster['score']:.2f}",
-                    thickness=2, text_height=0.5
+                    f"{monster['name']}:{sim:.2f}",
+                    thickness=3, text_height=1.0
                 )
 
         # Pre-scale display frame in background thread
@@ -2146,6 +2468,7 @@ class MonsterDetector:
                 self.run_once()
             except Exception as e:
                 logger.error(f"[MonsterDetector] Frame processing error: {e}")
+                logger.error(traceback.format_exc())
                 continue
 
             # Cap FPS (matches reference project pattern)

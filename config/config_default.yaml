@@ -19,6 +19,7 @@ bot:
 # ---------------------------------------------------------------------------
 key:
   jump: "alt"
+  jump_hold_up_seconds: 2.0    # 按跳跃键时同时按住 up 的时长（秒），抓绳用；0=关闭
   aoe_skill: "q"
   directional_attack: "w"
   teleport: "e"
@@ -120,6 +121,7 @@ route:
   search_range: 10              # 搜索最近路线颜色的半径（像素）
   climb_y_offset: 1             # 爬梯每N帧Y偏移量（像素），改小=梯子更短
   climb_y_interval: 15          # 每N帧偏移一次，改大=梯子更短
+  climb_complement_dist: 3      # 爬梯时横向/垂直互补的距离上限（像素），防止竖直梯被远处无关颜色带偏方向
   color_code:
     "255,0,0": "left none none"         # 红: 向左走
     "0,0,255": "right none none"        # 蓝: 向右走
@@ -152,7 +154,7 @@ system:
 # ---------------------------------------------------------------------------
 warning_monitor:
   enable: true                      # 是否启用测谎/报警监控线程
-  interval_seconds: 2.0             # 轮询间隔（秒）
+  interval_seconds: 1.0             # 轮询间隔（秒）
 
 # ---------------------------------------------------------------------------
 # HP/MP 自动回复

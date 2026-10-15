@@ -97,12 +97,18 @@ class KeyBoardController:
         self.key_teleport = key_cfg.get("teleport", "e")
         self.key_directional_attack = key_cfg.get("directional_attack", "w")
         self.key_aoe_skill = key_cfg.get("aoe_skill", "q")
+        self.key_pickup = key_cfg.get("pickup", "z")
+        self.jump_hold_up_seconds = float(key_cfg.get("jump_hold_up_seconds", 2.0))
         self.attack_mode = cfg.get("bot", {}).get("attack", "directional")
         self._t_last_attack = 0.0
+        self._t_last_pickup = 0.0
         self._attack_pause_until = 0.0
         self._face_direction_until = 0.0
+        self._hold_up_until = 0.0
         self._t_last_face_tap = 0.0
         self._last_face_dir = None
+        self._attack_count = 0            # 连续攻击计数
+        self._force_walk_until = 0.0      # 连击后强制移动（朝向怪物）的截止时间
         self._action_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_hp_potion = False
@@ -173,6 +179,7 @@ class KeyBoardController:
         self._last_left_right = "none"
         self._last_up_down = "none"
         self._last_action = "none"
+        self._hold_up_until = 0.0
 
     def stop(self):
         """Stop the controller and release all keys."""
@@ -214,17 +221,38 @@ class KeyBoardController:
         return ok
 
     def _run(self):
-        """Daemon loop — applies left/right, up/down, and action commands."""
+        """Daemon loop — applies left/right, up/down, action, and pickup commands."""
         while not self.is_terminated:
             if self.is_enable:
                 self._apply_movement()
                 self._apply_action()
+                self._apply_pickup()
             self._limit_fps()
+
+    def _apply_pickup(self):
+        """Tap the pickup key periodically while the character is moving."""
+        pickup_cfg = self.cfg.get("pickup", {})
+        if not pickup_cfg.get("enable", True):
+            return
+        moving = (
+            self.cmd_left_right in ("left", "right")
+            or self.cmd_up_down in ("up", "down")
+        )
+        if not moving:
+            return
+        pickup_cd = float(pickup_cfg.get("cooldown", 0.3))
+        t_now = time.time()
+        if t_now - self._t_last_pickup >= pickup_cd:
+            self._press_key_serialized(self.key_pickup, 0.03)
+            self._t_last_pickup = t_now
 
     def _apply_movement(self):
         """Apply left/right and up/down key state. Up/down uses pynput for game compatibility."""
         # Left/Right: support both walking (hold) and face-only taps.
         lr = self.cmd_left_right
+        # 连击后强制移动：把「转身」临时变成「走」，朝怪物方向走一小段重新面向。
+        if time.time() < self._force_walk_until and lr in ("face_left", "face_right"):
+            lr = "left" if lr == "face_left" else "right"
         if lr in ("face_left", "face_right"):
             # Face commands: tap only when the facing direction changes,
             # so repeated face commands don't cause the character to creep.
@@ -236,7 +264,11 @@ class KeyBoardController:
                 key = "left" if lr == "face_left" else "right"
                 if self._tap_direction(key, duration=max(0.03, tap_duration)):
                     self._last_face_dir = lr
-                    self._face_direction_until = time.time() + tap_duration + 0.04
+                    # 转身后多停一会儿再攻击，确保转身（可能被攻击动画吞掉）先完成。
+                    self._face_direction_until = time.time() + tap_duration + 0.3
+                    if time.time() - getattr(self, '_last_face_log', 0) >= 2.0:
+                        logger.info(f"[KB] 转身 {lr} → 按 {key} 键 ({tap_duration:.2f}s)")
+                        self._last_face_log = time.time()
             self._last_left_right = lr
         elif lr != self._last_left_right:
             if self._last_left_right in ("left", "right"):
@@ -244,6 +276,9 @@ class KeyBoardController:
             if lr in ("left", "right"):
                 key_down(lr)
                 self._face_direction_until = time.time() + 0.09
+                # Walking turns the character: keep the face-direction cache
+                # in sync so the next face_* command actually taps to turn.
+                self._last_face_dir = "face_left" if lr == "left" else "face_right"
             elif lr == "stop":
                 key_up("left")
                 key_up("right")
@@ -251,6 +286,9 @@ class KeyBoardController:
 
         # Up/Down (pynput — same as jump, better game compatibility)
         ud = self.cmd_up_down
+        # 抓绳：跳跃后短时间内强制按住 up（除非正往下）。
+        if time.time() < self._hold_up_until and ud != "down":
+            ud = "up"
         if ud != self._last_up_down:
             if self._last_up_down in ("up", "down"):
                 _pynput_kb.release(getattr(Key, self._last_up_down, self._last_up_down))
@@ -307,6 +345,13 @@ class KeyBoardController:
             if t_now - self._t_last_attack >= float(atk_cd):
                 self._press_key_serialized(atk_key, 0.05)
                 self._t_last_attack = t_now
+                # 连续攻击达到阈值后，短暂朝怪物方向移动一下（重新面向/贴近）。
+                self._attack_count += 1
+                interval = int(self.cfg.get("directional_attack", {}).get("attack_move_interval", 3))
+                if self._attack_count >= interval:
+                    move_seconds = float(self.cfg.get("directional_attack", {}).get("attack_move_seconds", 0.3))
+                    self._force_walk_until = time.time() + move_seconds
+                    self._attack_count = 0
             return
 
         if self.cmd_action != self._last_action:
@@ -314,6 +359,9 @@ class KeyBoardController:
             if self.cmd_action == "jump":
                 time.sleep(0.05)
                 self._press_key_serialized(self.key_jump)
+                # 抓绳优化：按跳的同时按住 up 一段时间（向下跳除外）。
+                if self.cmd_up_down != "down" and self.jump_hold_up_seconds > 0:
+                    self._hold_up_until = time.time() + self.jump_hold_up_seconds
             elif self.cmd_action == "teleport":
                 time.sleep(0.05)
                 self._press_key_serialized(self.key_teleport)

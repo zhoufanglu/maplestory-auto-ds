@@ -48,7 +48,7 @@ class RouteRecorder:
         self.fps = 0
         self.frame_count = 0
         self.is_first_frame = True
-        self.is_enable = True
+        self.is_enable = False   # 默认关闭，按 F1 才开始录制
 
         # Coordinates
         self.loc_minimap = (0, 0)
@@ -99,20 +99,31 @@ class RouteRecorder:
         # Create output directory
         # ------------------------------------------------------------------
         self.map_dir = os.path.join("minimaps", args.new_map)
-        if os.path.exists(self.map_dir):
-            ans = input(f"Directory '{self.map_dir}' already exists. Replace? [y/N]: ")
-            if ans.lower() == 'y':
-                shutil.rmtree(self.map_dir)
-            else:
-                logger.info("Exiting.")
-                sys.exit(0)
-        os.makedirs(self.map_dir)
+        if args.map:
+            # Continue an existing map: keep the directory, load the map as-is.
+            # (Do NOT prompt "Replace?" — that would delete the map we're loading.)
+            if not os.path.isdir(self.map_dir):
+                os.makedirs(self.map_dir)
+        else:
+            # Fresh recording: prompt before overwriting an existing map.
+            if os.path.exists(self.map_dir):
+                ans = input(f"Directory '{self.map_dir}' already exists. Replace? [y/N]: ")
+                if ans.lower() == 'y':
+                    shutil.rmtree(self.map_dir)
+                else:
+                    logger.info("Exiting.")
+                    sys.exit(0)
+            os.makedirs(self.map_dir)
         logger.info(f"Output directory: {self.map_dir}")
 
         # ------------------------------------------------------------------
         # Load existing map if provided
         # ------------------------------------------------------------------
         if args.map:
+            if not os.path.exists(args.map):
+                logger.error(f"Map file not found: {args.map}")
+                logger.error("继续录制需要已有地图文件；从零录制请去掉 --map 参数。")
+                sys.exit(1)
             self.img_map = load_image(args.map)
             logger.info(f"Loaded existing map: {args.map}")
 
@@ -137,6 +148,20 @@ class RouteRecorder:
 
     def _detect_minimap_first_frame(self):
         """Auto-detect minimap via white border, fallback to config."""
+        mm = self.cfg.get("minimap", {})
+
+        # Fixed mode: use the same calibrated coords as the playback detector,
+        # so the recorded map/route lines up exactly with playback.
+        if mm.get("fixed", False):
+            if mm.get("width", 0) > 10 and mm.get("height", 0) > 10:
+                logger.info(
+                    f"[Minimap] Fixed coords: ({mm['x']},{mm['y']}) "
+                    f"{mm['width']}x{mm['height']}"
+                )
+                return (mm["x"], mm["y"], mm["width"], mm["height"])
+            logger.error("Cannot detect minimap!")
+            return None
+
         from src.utils.common import get_minimap_loc_size
         result = get_minimap_loc_size(self.img_frame)
         if result:
@@ -145,7 +170,6 @@ class RouteRecorder:
             return (x + 1, y + 1, w_m - 2, h_m - 2)
 
         # Fallback to config
-        mm = self.cfg.get("minimap", {})
         if mm.get("width", 0) > 10:
             logger.info(f"[Minimap] Using config fallback")
             return (mm["x"], mm["y"], mm["width"], mm["height"])
@@ -500,6 +524,24 @@ class RouteRecorder:
         for i, text in enumerate(texts):
             cv2.putText(self.img_frame_debug, text, (10, 30 + 25 * i),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+        # Recording status — prominent indicator in the top-right corner.
+        if self.is_enable:
+            status_text = "录制中"
+            status_color = (0, 0, 255)   # red
+        else:
+            status_text = "已暂停"
+            status_color = (0, 180, 180)  # yellow-ish
+        (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+        sx = w - tw - 20
+        sy = th + 18
+        # Background box for contrast
+        cv2.rectangle(self.img_frame_debug, (sx - 10, sy - th - 10),
+                      (sx + tw + 10, sy + 10), (0, 0, 0), -1)
+        # Status dot
+        cv2.circle(self.img_frame_debug, (sx - 6, sy - th // 2), 5, status_color, -1)
+        cv2.putText(self.img_frame_debug, status_text, (sx + 4, sy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, status_color, 2, cv2.LINE_AA)
 
         # Draw minimap rectangle
         x, y = self.loc_minimap

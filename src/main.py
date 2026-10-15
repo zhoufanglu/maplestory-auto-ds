@@ -140,7 +140,8 @@ def main():
     # Warning (测谎/报警) detection — background thread, non-blocking
     # -------------------------------------------------------------------
     warning_cfg = cfg.get("warning_monitor", {})
-    warning_enabled = bool(warning_cfg.get("enable", True))
+    # 测谎报警开关：优先读 bot.warning（true=开 false=关），否则回退 warning_monitor.enable
+    warning_enabled = bool(cfg.get("bot", {}).get("warning", warning_cfg.get("enable", True)))
     warning_interval = float(warning_cfg.get("interval_seconds", 2.0))
     if warning_interval <= 0:
         warning_interval = 2.0
@@ -176,6 +177,9 @@ def main():
     cv2.namedWindow(win_name)
 
     def _on_mouse(event, x, y, flags, param):
+        if detector._minimap_select_mode:
+            detector.minimap_select_mouse(event, x, y, flags, param)
+            return
         if event == cv2.EVENT_LBUTTONDOWN:
             detector.request_title_selection_from_display(x, y)
         elif event == cv2.EVENT_RBUTTONDOWN:
@@ -187,7 +191,7 @@ def main():
         while not detector.is_terminated:
             # Show debug image — only when a new frame is ready
             # (exact same pattern as reference: MapleStoryAutoLevelUp.py:1851-1864)
-            if detector.is_frame_done and detector.frame_seq != last_frame_seq:
+            if detector.frame_seq != last_frame_seq:
                 if detector.img_display is not None:
                     cv2.imshow(win_name, detector.img_display)
                     now = time.time()
@@ -222,6 +226,8 @@ def main():
                 logger.info("Screenshot saved.")
             elif key == ord('c'):
                 detector.clear_title_selection()
+            elif key == ord('m'):
+                detector.toggle_minimap_select()
 
             # No extra fixed sleep: let waitKey pump events smoothly.
 

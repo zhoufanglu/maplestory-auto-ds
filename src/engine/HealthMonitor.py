@@ -332,6 +332,7 @@ class HealthMonitor:
         frame_h, frame_w = img_frame.shape[:2]
         bar_count = int(hm_cfg.get("bar_count", 2))
         keys = ["hp_bar_rect", "mp_bar_rect", "exp_bar_rect"][:bar_count]
+        self._bar_diag_count += 1
 
         rects = []
         for key in keys:

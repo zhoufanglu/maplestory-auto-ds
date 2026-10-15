@@ -289,6 +289,12 @@ def draw_rectangle(
     h, w = size
     cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
     if text:
+        # Black outline/shadow for readability against any background.
+        for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+            cv2.putText(
+                img, text, (x + dx, y - 5 + dy),
+                cv2.FONT_HERSHEY_SIMPLEX, text_height, (0, 0, 0), thickness
+            )
         cv2.putText(
             img, text, (x, y - 5),
             cv2.FONT_HERSHEY_SIMPLEX, text_height, color, thickness

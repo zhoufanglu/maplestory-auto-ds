@@ -1,28 +1,34 @@
 bot:
-  mode: "detect" # detect = 只检测不攻击, hunt
+  mode: "hunt" # detect = 只检测不攻击, hunt
   attack: "directional"
-  map: "north_forest_2"
-  enable_route: false
+  map: "dongbu3"
+  enable_route: true
+  warning: true               # 测谎报警开关 true=开 false=关
 
 system:
   fps_limit_main: 15
 
 warning_monitor:
-  enable: false
-  interval_seconds: 2.0
-
+  interval_seconds: 1.0
+  
 key:
   directional_attack: "x"
   aoe_skill: "a"
   add_hp: "end"
   add_mp: "home"
+  pickup: "z"                 # 拾取键
+  jump_hold_up_seconds: 2.0   # 按跳跃键时同时按住 up 的时长（秒），抓绳用；0=关闭
+
+pickup:
+  enable: true                # 移动时自动拾取
+  cooldown: 0.3               # 拾取按键间隔（秒）
 
 title:
   enable: true
   mode: "grayscale"           # 当前这张 title.png 建议先用 grayscale；如果现场干扰多再切 white_mask
   manual_select: true          # 在监视器窗口里点击称号候选框，手动锁定自己的角色
-  max_candidates: 8
-  candidate_threshold: 0.30
+  max_candidates: 1
+  candidate_threshold: 0.15
   lock_miss_tolerance: 18
   manual_track_radius: 180
   manual_track_threshold: 0.30
@@ -31,8 +37,8 @@ title:
   cache_ttl: 30                # 更频繁重搜，降低锁到错误 UI 文本的概率
   prev_search_radius: 180      # 优先在上次位置附近找，减少吸到其他玩家
   center_search_radius: 320    # 只在屏幕中部较大范围内做中心候选搜索
-  center_accept_radius: 220    # 超出中心太远的候选直接拒绝
-  max_jump_px: 140             # 新候选离上次位置太远时拒绝切换
+  center_accept_radius: 900    # 超出中心太远的候选直接拒绝（调大，允许称号在屏幕任意位置）
+  max_jump_px: 900             # 新候选离上次位置太远时拒绝切换（调大，允许称号自由跳变）
   stick_to_prev_margin: 0.03   # 新候选没有明显更优时，继续沿用上次锁定
   strong_match_threshold: 0.06 # 只有特别强的匹配才允许替换当前锁定
   white_lower: 185             # white_mask 模式备用参数
@@ -44,7 +50,8 @@ appearance:
   template: "character/fashi.png"
   search_radius: 140              # 在上次角色位置附近搜索外观的半径(像素)
   center_fallback_radius: 260     # 无历史位置时围绕屏幕中心搜索
-  match_threshold: 0.62           # CCORR_NORMED 相关度阈值 0~1，越大越严格
+  match_threshold: 0.85           # CCORR_NORMED 相关度阈值 0~1，>=0.85 用外观，<0.85 用称号
+  hold_frames: 20                 # 外观短暂丢失(如攻击动画)时，沿用上次外观位置多少帧再回退称号
   gate_radius: 90                 # 称号位置与外观位置差超过此值，改用外观定位
   feet_offset: [0, -6]            # 外观模板底部中心 → 脚底偏移 [x, y]
 #  这个是魔法密林 北部2的 位置 先存下
@@ -54,21 +61,33 @@ appearance:
 #  height: 144
 ############################
 minimap:
-  x: 15
+  fixed: true                    # true=用下面固定坐标(不自动白框检测)，窗口大小固定时更准
+  x: 17
   y: 130
-  width: 200
-  height: 98
+  width: 166
+  height: 149
   player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
   player_tolerance: 8            # 颜色容差起始值（会自动扩大到+30）
+  player_max_jump_px: 30         # 新检测点离上次位置超过此距离就不更新（防跳到传送门等静止标记）
+  dot_stuck_seconds: 3.0         # 绿点超过多少秒没动就重置重新定位（0=关闭）
 
 monster_detect:
-  # monsters: ["Octopus","lan_mo_gu"]
-  # monsters: ["Ligator"]
-  # monsters: ["black_axe_stump"]
-  monsters: ["mo_gu_shan"]
+  # 每个怪物文件夹单独配置：diff_thres / scales / min_color_spread
+  # （没单独配的属性，回退用下面全局的 diff_thres / scales / min_color_spread）
+  monsters:
+    fu_mu_yao:
+      diff_thres: 0.40
+      scales: [1.1, 1.2]
+    black_axe_stump:
+      diff_thres: 0.44
+      scales: [1.1, 1.2]
+      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
+  #    OrangeMushroom2:
+#      diff_thres: 0.22
+#      scales: [1.1]
   mode: "color"                     # colaor / grayscale / contour_only
-  diff_thres: 0.35                  # 匹配阈值 0.0~1.0（越小越严格）
-  scales: [1.1]                 # 缩放比例数组 [0.5~1.5]，素材不匹配时加多个: [0.8, 1.0, 1.2]
+  diff_thres: 0.25            # 全局默认匹配阈值 0.0~1.0（越小越严格）
+  scales: [1.1]                 # 全局默认缩放比例数组 [0.5~1.5]
   display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）
   detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
   with_enemy_hp_bar: true           # 通过怪物血条辅助检测（防掉落物遮挡）
@@ -77,11 +96,13 @@ monster_detect:
   min_color_spread: 30              # 颜色纯度下限（过滤灰色云朵等中性色误识别）
 
 directional_attack:
-  attack_in_place: true            # 原地攻击：不移动持续攻击（刷固定点用）
-  range_x: 600                     # 水平攻击范围（像素）——左右距离，调大打得远
-  range_y: 70                      # 垂直攻击范围（像素）——上下距离
-  face_tap_duration: 0.07          # 转身点按时长（秒），太短游戏识别不到会打反方向
-  face_deadzone_px: 8              # 怪物离玩家多近就不转身（像素）x
+  attack_in_place: false            # 原地攻击：不移动持续攻击（刷固定点用）
+  range_x: 300                     # 水平攻击范围（像素）——左右距离，调大打得远
+  range_y: 40                      # 垂直攻击范围（像素）——上下距离
+  face_tap_duration: 0.3           # 转身点按时长（秒），太短游戏识别不到会打反方向
+  face_deadzone_px: 50             # 怪物离玩家多近就停步攻击（像素），朝怪物走时用到
+  attack_move_interval: 3          # 连续攻击多少次后，朝怪物方向移动一下
+  attack_move_seconds: 0.3         # 移动时长（秒）
   aoe_monster_count: 3             # 识别怪物>=此数量时使用群攻
   in_place_aoe_idle_seconds: 3.0   # 原地攻击时，多少秒没怪就放一次群攻(爆炸箭)
   in_place_walk_interval_seconds: 30    # 原地攻击时每隔多少秒走动一次
@@ -98,8 +119,16 @@ directional_attack:
   search_random_jump_cd: 45         # 跳跃冷却帧数，避免连跳
 
 route:
+  search_range: 30                    # 搜索最近路线颜色的半径（像素），调大能跨过路线小缺口
+  miss_grace_frames: 30               # 找不到路线颜色时，保持上一步移动多少帧再停（桥接缺口）
   climb_y_offset: 0.5                 # 爬梯Y偏移量（像素），改小=梯子更短
   climb_y_interval: 5             # 每N帧偏移一次，改大=梯子更短
+  climb_complement_dist: 3            # 爬梯时横向/垂直互补的距离上限（像素），防止竖直梯被远处无关颜色带偏方向
+
+stuck_recovery:
+  enable: true                        # 跟路线时原地卡住自动脱离
+  timeout_seconds: 3.0                # 原地未移动多久判定为卡住（秒）
+  unstick_seconds: 2.0                # 卡住后往左走多久（秒）
 
 health_monitor:
   enable: true
