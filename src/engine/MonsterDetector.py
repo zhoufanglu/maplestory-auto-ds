@@ -2352,7 +2352,7 @@ class MonsterDetector:
                     cv2.putText(self.img_frame_debug, "P", (px+8, py+5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # Route minimap preview in top-right corner (matches reference project)
+            # Route minimap preview on right-middle; keep clear of top-right stats.
             if self.img_route is not None and self.loc_player_global != (0.0, 0.0):
                 route_bgr = cv2.cvtColor(self.img_route, cv2.COLOR_RGB2BGR)
                 gx, gy = int(self.loc_player_global[0]), int(self.loc_player_global[1])
@@ -2377,7 +2377,17 @@ class MonsterDetector:
                     ch, cw = crop.shape[:2]
                     fh, fw = self.img_frame_debug.shape[:2]
                     px_paste = fw - cw - 10
-                    py_paste = 10
+                    # Reserve top-right area for HP/MP + mode labels + monster count.
+                    hm_bar_count = int(self.cfg.get("health_monitor", {}).get("bar_count", 3))
+                    hm_rows = 2 if hm_bar_count == 2 else 3
+                    top_reserved = 30 + 30 * hm_rows + 40
+                    if self.monsters:
+                        top_reserved += 35
+
+                    # Prefer right-middle to avoid overlapping top-right HUD text.
+                    py_preferred = (fh - ch) // 2
+                    py_paste = max(top_reserved, py_preferred)
+                    py_paste = min(py_paste, max(0, fh - ch - 10))
                     if (py_paste >= 0 and px_paste >= 0
                             and py_paste + ch <= fh and px_paste + cw <= fw):
                         self.img_frame_debug[py_paste:py_paste + ch, px_paste:px_paste + cw] = crop
