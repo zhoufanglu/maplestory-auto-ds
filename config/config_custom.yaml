@@ -1,7 +1,7 @@
 bot:
   mode: "hunt" # detect = 只检测不攻击, hunt
   attack: "directional"
-  map: "dongbu3"
+  map: "duoluozhuyi"
   enable_route: true
   warning: true               # 测谎报警开关 true=开 false=关
 
@@ -22,6 +22,12 @@ key:
 pickup:
   enable: true                # 移动时自动拾取
   cooldown: 0.3               # 拾取按键间隔（秒）
+
+buff_skill:
+  keys: ["2"]                # 自动加的 buff 技能键
+  cooldown: [120]            # 每个键的冷却时间（秒），顺序和 keys 一致
+  action_cooldown: 1         # 放完 buff 后延迟多久再继续别的动作（秒）
+  freeze_seconds: 1.5        # 放 buff 时停止攻击/移动，人物冻结这么久（秒）
 
 title:
   enable: true
@@ -62,26 +68,39 @@ appearance:
 ############################
 minimap:
   fixed: true                    # true=用下面固定坐标(不自动白框检测)，窗口大小固定时更准
-  x: 17
+  # dongbu3
+  # x: 17
+  # y: 130
+  # width: 166
+  # height: 149
+  # 堕落主义
+  x: 23
   y: 130
-  width: 166
-  height: 149
+  width: 122
+  height: 106
   player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
   player_tolerance: 8            # 颜色容差起始值（会自动扩大到+30）
   player_max_jump_px: 30         # 新检测点离上次位置超过此距离就不更新（防跳到传送门等静止标记）
   dot_stuck_seconds: 3.0         # 绿点超过多少秒没动就重置重新定位（0=关闭）
+  width_boundary_pct: 0.6        # 角色只能在中部这个比例(30%~70%)内移动，0=关闭
 
 monster_detect:
   # 每个怪物文件夹单独配置：diff_thres / scales / min_color_spread
   # （没单独配的属性，回退用下面全局的 diff_thres / scales / min_color_spread）
   monsters:
-    fu_mu_yao:
-      diff_thres: 0.40
+    zhang_yu:
+      diff_thres: 0.30
       scales: [1.1, 1.2]
-    black_axe_stump:
-      diff_thres: 0.44
-      scales: [1.1, 1.2]
-      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
+    lan_mo_gu:
+        diff_thres: 0.20
+        scales: [1.1]
+#    fu_mu_yao:
+#      diff_thres: 0.40
+#      scales: [1.1, 1.2]
+#    black_axe_stump:
+#      diff_thres: 0.44
+#      scales: [1.1, 1.2]
+#      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
   #    OrangeMushroom2:
 #      diff_thres: 0.22
 #      scales: [1.1]

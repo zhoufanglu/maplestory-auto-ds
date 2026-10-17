@@ -109,6 +109,11 @@ class KeyBoardController:
         self._last_face_dir = None
         self._attack_count = 0            # 连续攻击计数
         self._force_walk_until = 0.0      # 连击后强制移动（朝向怪物）的截止时间
+        # Buff skill
+        buff_keys = self.cfg.get("buff_skill", {}).get("keys", []) or []
+        self._t_last_buff_cast = [0.0] * len(buff_keys)
+        self._t_last_skill = 0.0
+        self._buff_freeze_until = 0.0       # 放 buff 期间冻结（禁止移动）的截止时间
         self._action_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_hp_potion = False
@@ -221,16 +226,44 @@ class KeyBoardController:
         return ok
 
     def _run(self):
-        """Daemon loop — applies left/right, up/down, action, and pickup commands."""
+        """Daemon loop — applies left/right, up/down, action, pickup, and buff commands."""
         while not self.is_terminated:
             if self.is_enable:
                 self._apply_movement()
                 self._apply_action()
                 self._apply_pickup()
+                self._apply_buff()
             self._limit_fps()
 
+    def _apply_buff(self):
+        """自动加 buff：仅在 hunt 模式，按各 buff 键的冷却时间按下。"""
+        if self.cfg.get("bot", {}).get("mode", "detect") != "hunt":
+            return
+        buff_cfg = self.cfg.get("buff_skill", {})
+        keys = buff_cfg.get("keys", []) or []
+        cooldowns = buff_cfg.get("cooldown", []) or []
+        action_cd = float(buff_cfg.get("action_cooldown", 1.0))
+        freeze_seconds = float(buff_cfg.get("freeze_seconds", 1.5))
+        if not keys:
+            return
+        t_now = time.time()
+        for i, k in enumerate(keys):
+            cd = float(cooldowns[i]) if i < len(cooldowns) else 0.0
+            last = self._t_last_buff_cast[i] if i < len(self._t_last_buff_cast) else 0.0
+            if t_now - last >= cd and t_now - self._t_last_skill >= action_cd:
+                self._press_key_serialized(str(k), 0.05)
+                self._t_last_buff_cast[i] = t_now
+                self._t_last_skill = t_now
+                # 放 buff 期间停止攻击 + 移动，人物冻结 freeze_seconds 秒。
+                self._attack_pause_until = time.time() + freeze_seconds
+                self._buff_freeze_until = time.time() + freeze_seconds
+                logger.info(f"[Buff] 按下 buff 键 '{k}'（冷却 {cd}s，冻结 {freeze_seconds}s）")
+                break
+
     def _apply_pickup(self):
-        """Tap the pickup key periodically while the character is moving."""
+        """Tap the pickup key periodically while the character is moving（仅 hunt 模式）。"""
+        if self.cfg.get("bot", {}).get("mode", "detect") != "hunt":
+            return
         pickup_cfg = self.cfg.get("pickup", {})
         if not pickup_cfg.get("enable", True):
             return
@@ -248,6 +281,16 @@ class KeyBoardController:
 
     def _apply_movement(self):
         """Apply left/right and up/down key state. Up/down uses pynput for game compatibility."""
+        # 放 buff 冻结期间：释放所有方向键，禁止移动。
+        if time.time() < self._buff_freeze_until:
+            if self._last_left_right in ("left", "right"):
+                key_up(self._last_left_right)
+            if self._last_up_down in ("up", "down"):
+                _pynput_kb.release(getattr(Key, self._last_up_down, self._last_up_down))
+            self._last_left_right = "none"
+            self._last_up_down = "none"
+            return
+
         # Left/Right: support both walking (hold) and face-only taps.
         lr = self.cmd_left_right
         # 连击后强制移动：把「转身」临时变成「走」，朝怪物方向走一小段重新面向。

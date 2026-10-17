@@ -1805,6 +1805,20 @@ class MonsterDetector:
                     action = "jump"
                     self._hunt_next_jump_frame = self.frame_count + jump_cd
 
+        # 80% 宽度边界：角色只能在中部这个比例内移动，到边界就掉头。
+        boundary_pct = float(self.cfg.get("minimap", {}).get("width_boundary_pct", 0.0))
+        if 0.0 < boundary_pct < 1.0 and self.loc_player_minimap is not None and self.img_minimap is not None:
+            mm_w = self.img_minimap.shape[1]
+            if mm_w > 0:
+                margin = mm_w * (1.0 - boundary_pct) / 2.0
+                left_b = margin
+                right_b = mm_w - margin
+                mx = self.loc_player_minimap[0]
+                if mx <= left_b and self._hunt_search_dir == "left":
+                    self._hunt_search_dir = "right"
+                elif mx >= right_b and self._hunt_search_dir == "right":
+                    self._hunt_search_dir = "left"
+
         return self._hunt_search_dir, "none", action
 
     def _get_in_place_command(self):
@@ -2328,6 +2342,26 @@ class MonsterDetector:
                     f"search=(noMob:{self._hunt_no_monster_frames},dir:{self._hunt_search_dir})"
                 )
 
+            # 宽度边界：任何移动模式下，绿点都不许超出黄色虚线（左右边界）。
+            boundary_pct = float(self.cfg.get("minimap", {}).get("width_boundary_pct", 0.0))
+            if (0.0 < boundary_pct < 1.0
+                    and self.loc_player_minimap is not None
+                    and self.img_minimap is not None):
+                mm_w = self.img_minimap.shape[1]
+                if mm_w > 0:
+                    margin = mm_w * (1.0 - boundary_pct) / 2.0
+                    left_b = margin
+                    right_b = mm_w - margin
+                    mx = self.loc_player_minimap[0]
+                    if mx <= left_b and move_x in ("left", "face_left"):
+                        move_x = "right"
+                        if not self.is_on_ladder:
+                            move_y = "none"
+                    elif mx >= right_b and move_x in ("right", "face_right"):
+                        move_x = "left"
+                        if not self.is_on_ladder:
+                            move_y = "none"
+
             self._kb.set_command(f"{move_x} {move_y} {action}")
 
         # Always draw decorations on debug frame
@@ -2351,6 +2385,26 @@ class MonsterDetector:
                     cv2.circle(self.img_frame_debug, (px, py), 6, (0, 255, 0), -1)
                     cv2.putText(self.img_frame_debug, "P", (px+8, py+5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # 宽度边界：画黄色虚线（两条竖线，标记可移动范围）
+                boundary_pct = float(self.cfg.get("minimap", {}).get("width_boundary_pct", 0.0))
+                if 0.0 < boundary_pct < 1.0:
+                    mm_h, mm_w = self.img_minimap.shape[:2]
+                    margin = mm_w * (1.0 - boundary_pct) / 2.0
+                    y0 = self.loc_minimap[1]
+                    y1 = self.loc_minimap[1] + mm_h
+                    dash_len, gap_len = 8, 5
+                    for bx in (self.loc_minimap[0] + margin, self.loc_minimap[0] + mm_w - margin):
+                        y = y0
+                        while y < y1:
+                            cv2.line(self.img_frame_debug, (int(bx), int(y)),
+                                     (int(bx), int(min(y + dash_len, y1))), (0, 255, 255), 2)
+                            y += dash_len + gap_len
+                    if self.frame_count % 60 == 0:
+                        logger.info(
+                            f"[Boundary] minimap=({self.loc_minimap[0]},{self.loc_minimap[1]}) "
+                            f"size={mm_w}x{mm_h} pct={boundary_pct} "
+                            f"left_x={self.loc_minimap[0] + margin:.1f} right_x={self.loc_minimap[0] + mm_w - margin:.1f}"
+                        )
 
             # Route minimap preview on right-middle; keep clear of top-right stats.
             if self.img_route is not None and self.loc_player_global != (0.0, 0.0):
