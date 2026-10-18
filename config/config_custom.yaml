@@ -1,7 +1,7 @@
 bot:
-  mode: "hunt" # detect = 只检测不攻击, hunt
+  mode: "hunt" # detect = 只检测不攻击, hunt = 路线挂机
   attack: "directional"
-  map: "duoluozhuyi"
+  map: "duoluozhuyi" #duoluozhuyi dongbu3
   enable_route: true
   warning: true               # 测谎报警开关 true=开 false=关
 
@@ -17,7 +17,7 @@ key:
   add_hp: "end"
   add_mp: "home"
   pickup: "z"                 # 拾取键
-  jump_hold_up_seconds: 2.0   # 按跳跃键时同时按住 up 的时长（秒），抓绳用；0=关闭
+  jump_hold_up_seconds2: 2.0   # 按跳跃键时同时按住 up 的时长（秒），抓绳用；0=关闭
 
 pickup:
   enable: true                # 移动时自动拾取
@@ -28,6 +28,7 @@ buff_skill:
   cooldown: [120]            # 每个键的冷却时间（秒），顺序和 keys 一致
   action_cooldown: 1         # 放完 buff 后延迟多久再继续别的动作（秒）
   freeze_seconds: 1.5        # 放 buff 时停止攻击/移动，人物冻结这么久（秒）
+  startup_delay: 2           # 脚本启动后延迟多久才执行第一次 buff（秒）
 
 title:
   enable: true
@@ -67,12 +68,12 @@ appearance:
 #  height: 144
 ############################
 minimap:
-  fixed: true                    # true=用下面固定坐标(不自动白框检测)，窗口大小固定时更准
+ #fixed: true                    # true=用下面固定坐标(不自动白框检测)，窗口大小固定时更准
   # dongbu3
-  # x: 17
-  # y: 130
-  # width: 166
-  # height: 149
+#  x: 17
+#  y: 130
+#  width: 166
+#  height: 149
   # 堕落主义
   x: 23
   y: 130
@@ -89,19 +90,19 @@ monster_detect:
   # （没单独配的属性，回退用下面全局的 diff_thres / scales / min_color_spread）
   monsters:
     zhang_yu:
-      diff_thres: 0.30
+      diff_thres: 0.302
       scales: [1.1, 1.2]
     lan_mo_gu:
         diff_thres: 0.20
         scales: [1.1]
 #    fu_mu_yao:
-#      diff_thres: 0.40
+#      diff_thres: 0.42
 #      scales: [1.1, 1.2]
 #    black_axe_stump:
 #      diff_thres: 0.44
 #      scales: [1.1, 1.2]
 #      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
-  #    OrangeMushroom2:
+#      OrangeMushroom2:
 #      diff_thres: 0.22
 #      scales: [1.1]
   mode: "color"                     # colaor / grayscale / contour_only

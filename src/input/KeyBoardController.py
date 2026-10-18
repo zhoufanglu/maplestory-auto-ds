@@ -110,10 +110,13 @@ class KeyBoardController:
         self._attack_count = 0            # 连续攻击计数
         self._force_walk_until = 0.0      # 连击后强制移动（朝向怪物）的截止时间
         # Buff skill
-        buff_keys = self.cfg.get("buff_skill", {}).get("keys", []) or []
+        buff_cfg = self.cfg.get("buff_skill", {})
+        buff_keys = buff_cfg.get("keys", []) or []
         self._t_last_buff_cast = [0.0] * len(buff_keys)
         self._t_last_skill = 0.0
         self._buff_freeze_until = 0.0       # 放 buff 期间冻结（禁止移动）的截止时间
+        startup_delay = float(buff_cfg.get("startup_delay", 0.0))
+        self._buff_ready_time = time.time() + startup_delay  # 首次 buff 允许时间（启动延迟）
         self._action_lock = threading.Lock()
         self._send_lock = threading.Lock()
         self._pending_hp_potion = False
@@ -238,6 +241,9 @@ class KeyBoardController:
     def _apply_buff(self):
         """自动加 buff：仅在 hunt 模式，按各 buff 键的冷却时间按下。"""
         if self.cfg.get("bot", {}).get("mode", "detect") != "hunt":
+            return
+        # 启动延迟：脚本启动后 startup_delay 秒内不执行 buff。
+        if time.time() < self._buff_ready_time:
             return
         buff_cfg = self.cfg.get("buff_skill", {})
         keys = buff_cfg.get("keys", []) or []
