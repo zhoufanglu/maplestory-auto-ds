@@ -6,7 +6,7 @@ bot:
   warning: true               # 测谎报警开关 true=开 false=关
 
 system:
-  fps_limit_main: 15
+  fps_limit_main: 30
 
 warning_monitor:
   interval_seconds: 1.0
@@ -103,12 +103,12 @@ monster_detect:
 #      scales: [1.1, 1.2]
 #      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
 #      OrangeMushroom2:
-#      diff_thres: 0.22
+#      diff_thres: 0.22z
 #      scales: [1.1]
   mode: "color"                     # colaor / grayscale / contour_only
   diff_thres: 0.25            # 全局默认匹配阈值 0.0~1.0（越小越严格）
   scales: [1.1]                 # 全局默认缩放比例数组 [0.5~1.5]
-  display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）
+  display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）0.47
   detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
   with_enemy_hp_bar: true           # 通过怪物血条辅助检测（防掉落物遮挡）
   hp_bar_color: [0, 255, 0]         # 怪物血条 BGR 颜色（绿色）

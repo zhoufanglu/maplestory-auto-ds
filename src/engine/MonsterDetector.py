@@ -2030,12 +2030,12 @@ class MonsterDetector:
 
         for i, text in enumerate(texts):
             x, y = 10, text_y_start + text_y_interval * i
-            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                cv2.putText(
-                    self.img_frame_debug, text,
-                    (x + dx, y + dy),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2, cv2.LINE_AA
-                )
+            # 黑底矩形 + 文字（比 4 次描边更快，也更清晰）
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+            cv2.rectangle(self.img_frame_debug,
+                          (x - 2, y - th - 2),
+                          (x + tw + 2, y + 4),
+                          (0, 0, 0), -1)
             cv2.putText(
                 self.img_frame_debug, text,
                 (x, y),
@@ -2066,14 +2066,14 @@ class MonsterDetector:
                         (x2, y2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
 
-        # Monster count in top-right corner (big text, eye-catching)
+        # Monster count in top-center (small text)
         if self.monsters:
             count_text = f"Monsters: {len(self.monsters)}"
-            (tw, th), _ = cv2.getTextSize(count_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)
+            (tw, th), _ = cv2.getTextSize(count_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
             cv2.putText(
                 self.img_frame_debug, count_text,
-                (self.img_frame.shape[1] - tw - 15, th + 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA
+                (self.img_frame.shape[1] // 2 - tw // 2, th + 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (42, 42, 165), 2, cv2.LINE_AA
             )
 
         self._draw_title_candidates()
