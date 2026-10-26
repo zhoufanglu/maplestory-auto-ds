@@ -4,7 +4,12 @@
 * 仅记录和分享
 
 ## 演示视频
+
+完整视频：
 <video src="video_demo/2026-10-18%2020-00-04.mp4" controls width="800"></video>
+
+GIF 动图预览（前 30 秒）：
+![演示 GIF](video_demo/demo.gif)
 
 ---
 
