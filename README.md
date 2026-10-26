@@ -3,17 +3,29 @@
 * 适用于市面上的 079/083 版本冒险岛（wingms、mapleStoryGo、国服怀旧服等）
 * 仅记录和分享
 
+## 完成功能
+- [x] 角色识别
+- [x] 怪物识别
+- [x] 地图圈选 + 地图绘制（路线录制）
+- [x] hp_mp自动识别回复
+- [x] 自动打怪（走路、攻击、技能）
+- [x] 告警（测谎报警）
+- [ ] 客户端化
+
 ## 演示视频
 
-完整视频：
-<video src="video_demo/2026-10-18%2020-00-04.mp4" controls width="800"></video>
+[//]: # (完整视频：)
+
+[//]: # (<video src="video_demo/2026-10-18%2020-00-04.mp4" controls width="800"></video>)
 
 GIF 动图预览（前 30 秒）：
-![演示 GIF](video_demo/demo.gif)
+![演示 GIF](md_demo_assets/demo.gif)
 
 ---
 
 # 1、角色识别（角色定位）
+
+![角色识别演示](md_demo_assets/角色识别.png)
 
 ## 文件目录
 
@@ -44,6 +56,8 @@ title:                         # 称号定位（title.png）
 ---
 
 # 2、怪物识别
+
+![怪物识别演示](md_demo_assets/怪物识别.png)
 
 ## 文件目录
 
@@ -91,6 +105,8 @@ monster_detect:
 ---
 
 # 3、地图圈选 + 地图绘制（路线录制）
+
+![地图识别与绘制演示](md_demo_assets/地图识别与绘制.png)
 
 ## 3-1、地图圈选（小地图框选）
 
