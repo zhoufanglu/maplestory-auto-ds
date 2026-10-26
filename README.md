@@ -1,182 +1,74 @@
 # 前言
-* 本项目参考了这个库 [MapleStoryAutoLevelUp](https://github.com/KenYu910645/MapleStoryAutoLevelUp)
-* 适用于市面上的 079/083 版本冒险岛（wingms、mapleStoryGo、国服怀旧服等）
-* 仅记录和分享
+* 本项目参考了这个库[MapleStoryAutoLevelUp](https://github.com/KenYu910645/MapleStoryAutoLevelUp) 
+* 只要是市面上的079版本的冒险岛都可以使用，测试过的版本有：wingms, mapleStoryGo。
+* 还有，开挂是不对的，本人已经被封了3个号。
 
-## 完成功能
-- [x] 角色识别
-- [x] 怪物识别
-- [x] 地图圈选 + 地图绘制（路线录制）
-- [x] hp_mp自动识别回复
-- [x] 自动打怪（走路、攻击、技能）
-- [x] 告警（测谎报警）
-- [ ] 客户端化
+# 功能
+ * [x] mini地图识别 (还有问题，需要调试)
+ * [x] 角色识别 
+ * [x] 怪物识别
+ * [ ] 地图绘制 
+ * [x] 自动打怪
+ * [x] 自动吃药
+ * [x] 测谎报警 (需要看看国服什么样子的策划界面)
 
-## 演示视频
 
-[//]: # (完整视频：)
-
-[//]: # (<video src="video_demo/2026-10-18%2020-00-04.mp4" controls width="800"></video>)
-
-GIF 动图预览（前 30 秒）：
-![演示 GIF](md_demo_assets/demo.gif)
-
----
-
-# 1、角色识别（角色定位）
-
-![角色识别演示](md_demo_assets/角色识别.png)
-
-## 文件目录
-
-| 文件 | 作用 |
-|------|------|
-| `character/fashi.png` | 角色**外观**模板（主定位，蓝色角色） |
-| `character/title.png` | 角色**称号**模板（兜底定位） |
-
-## 配置说明（`config/config_custom.yaml`）
-
-优先级：**外观为主，称号兜底**。
-
+# 1、识别角色 + 怪物 + miniMap
+## 1-1、演示
+![识别怪物演示](demo_gif/recognize_user_map_monster.gif)
+## 1-2、素材库找到怪物素材
+* [素材下载地址](https://maplestory.wiki/GMS/83/mob/1110101)
+* 把走动的素材下载下载，放到`monster/下载的怪物名称`文件夹下
+* 大概长这样![下载的怪物素材demo](demo_gif/monster.png)
+* 如何调整配置
+  * 打开`config/config_data.yaml`，找到`mob`字段
+  * 添加新的怪物配置，示例如下：只要改这三个字段就行
 ```yaml
-appearance:                    # 外观定位（fashi.png）
-  enable: true
-  template: "character/fashi.png"
-  match_threshold: 0.85        # CCORR 匹配分，>=0.85 用外观，<0.85 用称号
+monsters: ["black_axe_stump"]  # 指定怪物文件夹，数组可多个
+diff_thres: 0.46               # 匹配阈值（越小越严格）
+scales: [1]                    # 缩放比例，官方素材不匹配时改: [0.7, 0.85, 1.0, 1.15]            # 每N帧检测一次 (1=每帧, 3=流畅优先)
+  ```
 
-title:                         # 称号定位（title.png）
-  enable: true
-  mode: "grayscale"            # grayscale / white_mask
-  match_threshold: 0.28        # SQDIFF 分数，<0.28 算命中（越小越像）
+# 2、地图绘制
+TODO
+
+# 3、单独测试称号定位
+
+如果你只想验证 `character/title.png` 能不能定位到角色，不想直接跑完整挂机流程，可以先跑：
+
+```powershell
+python .\test\test_title_locator.py
 ```
 
-- 右下角会显示 `AP: x.xx [v]`（外观分）和 `Title: x.xx [x]`（称号分），`[v]` 表示当前用哪个定位。
-- 外观匹配分掉到 0.85 以下（比如攻击动画）就自动切到称号定位。
+默认会读取：
 
----
+- `config/config_default.yaml`
+- `config/config_custom.yaml`
+- `test/test_image/screenshot.png`
 
-# 2、怪物识别
+并输出：
 
-![怪物识别演示](md_demo_assets/怪物识别.png)
+- `score`
+- 是否命中 `hit=True/False`
+- `title_loc`
+- `player_loc`
 
-## 文件目录
+同时会生成调试图：
 
-怪物素材放在 `monster/` 下，**每个怪物一个文件夹**：
+- `screenshot/title_locator_debug.png`
 
-```
-monster/
-  zhang_yu/
-    move_0.png
-    move_1.png
-    ...
-  lan_mo_gu/
-    stand_0.png
-    move_0.png
-    ...
+如果要换测试图：
+
+```powershell
+python .\test\test_title_locator.py --image test\test_image\screenshot.png
 ```
 
-- 素材下载地址：[https://maplestory.wiki/GMS/83/mob/1110101](https://maplestory.wiki/GMS/83/mob/1110101)
-- 把怪物「走动/站立」的图片放进对应文件夹即可。
+## Star History
 
-## 配置说明（`config/config_custom.yaml`）
-
-```yaml
-monster_detect:
-  mode: "color"                # color / grayscale / contour_only
-  diff_thres: 0.25             # 全局默认匹配阈值（越小越严格）
-  scales: [1.1]                # 全局默认缩放比例
-  min_color_spread: 30         # 颜色纯度下限（过滤云朵等误识别）
-
-  # 每个怪物单独配置（key = 文件夹名）
-  monsters:
-    zhang_yu:
-      diff_thres: 0.302
-      scales: [1.1, 1.2]
-    lan_mo_gu:
-      diff_thres: 0.20
-      scales: [1.1]
-      min_color_spread: 30     # 暗色怪物可调低，如 0
-```
-
-- 每个怪物的 `diff_thres` / `scales` / `min_color_spread` 会覆盖全局默认。
-- 怪物识别框颜色：**棕红色 `(42,42,165)`**，框上显示 `怪物名:相似度`。
-- 顶部中间显示 `Monsters: N`（识别到的怪物数量）。
-
----
-
-# 3、地图圈选 + 地图绘制（路线录制）
-
-![地图识别与绘制演示](md_demo_assets/地图识别与绘制.png)
-
-## 3-1、地图圈选（小地图框选）
-
-在监视器（NewMaple）窗口里：
-
-1. 按 **`m`** 键 → 进入圈选模式（右上角出现 3 倍放大镜，方便对准边框）。
-2. 按住左键**拖拽框住小地图**，松手即选定。
-3. 控制台会打印 `[Minimap] → 写进 config: x=... y=... width=... height=...`，把这 4 个值填进 `config_custom.yaml` 的 `minimap` 段。
-
-```yaml
-minimap:
-  fixed: true                  # true=用下面固定坐标
-  x: 23
-  y: 130
-  width: 122
-  height: 106
-  player_color: [136, 255, 255]  # 角色小黄点 BGR (#ffff88)
-  player_tolerance: 8
-  width_boundary_pct: 0.6      # 角色只能在中间 30%~70% 内移动（0=关闭）
-```
-
-- 小地图用**红色框**标记，角色点用**绿色点 P** 标记，移动边界用**黄色虚线**标记。
-
-## 3-2、地图绘制（录制路线）
-
-```bash
-.venv/Scripts/python.exe tools/routeRecorder.py --new_map duoluozhuyi --cfg custom
-```
-
-参数：
-- `--new_map`：地图名（输出到 `minimaps/<地图名>/`）
-- `--cfg`：用哪个配置（`custom` = `config_custom.yaml`）
-
-**继续录制已有地图（不覆盖）**：
-```bash
-.venv/Scripts/python.exe tools/routeRecorder.py --new_map duoluozhuyi --cfg custom --map minimaps/duoluozhuyi/map.png
-```
-
-录制按键（窗口里）：
-- **F1**：开始/暂停录制（默认关，先走到起点再按）
-- **F3**：到终点放黄点 + 保存 `route*.png`（录多段就每段终点按一次 F3）
-- **Q**：退出
-
-录制结果：`minimaps/<地图名>/` 下生成 `map.png`（拼接大地图）+ `route1.png`、`route2.png`…（路线），`main.py` 会按 route1 → route2 → … 循环走。
-
----
-
-# 4、告警（测谎报警）
-
-## 开关
-
-在 `config/config_custom.yaml`：
-
-```yaml
-bot:
-  warning: true               # true=开 false=关
-```
-
-## 文件地址
-
-| 文件 | 作用 |
-|------|------|
-| `warning/warning.png` | 告警模板截图（检测时用来匹配弹窗） |
-| `warning/warning.mp3` | 报警音频 |
-| `warning/warning.py` | 告警检测逻辑 |
-
-- 检测到测谎弹窗会**播放报警音**并在控制台打印 `[Warning] 检测到测谎报警弹窗！`。
-- 匹配阈值在 `warning/warning.py` 里：`CONFIDENCE_LEVEL = 0.5`（0~1，越大越严格）。
-- 如果报警图变了，替换 `warning/warning.png` 即可。
-
-## 手动截图
-
-监视器窗口按 **`s`** 键截图，保存到 `screenshot/` 目录（文件名带时间戳）。
+<a href="https://www.star-history.com/?repos=zhoufanglu%2Fmaplestory-auto-ds&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=zhoufanglu/maplestory-auto-ds&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=zhoufanglu/maplestory-auto-ds&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=zhoufanglu/maplestory-auto-ds&type=date&legend=top-left" />
+ </picture>
+</a>
