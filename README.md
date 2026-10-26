@@ -1,6 +1,9 @@
 # 前言
+
+> [English](./README_EN.md)
+
 * 本项目参考了这个库 [MapleStoryAutoLevelUp](https://github.com/KenYu910645/MapleStoryAutoLevelUp)
-* 适用于市面上的 079/083 版本冒险岛（wingms、mapleStoryGo、国服怀旧服等）
+* 适用于市面上的 079/083 版本冒险岛（国服怀旧服,MapleStory Classic World..., 只要是冒险岛差不多类型的，按道理都可以）
 * 仅记录和分享
 
 ## 完成功能
