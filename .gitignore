@@ -20,6 +20,8 @@ log/
 screenshot/
 video/
 
-# OS files
+# Generated outputs
+lie-detector-test /output/
+
 .DS_Store
 Thumbs.db
