@@ -168,7 +168,7 @@ health_monitor:
   bar_max_width: 180
   bar_min_height: 16
   bar_max_height: 24
-  add_hp_percent: 50
+  add_hp_percent: 70
   add_mp_percent: 10
   hp_rearm_percent: 54          # 回到该值以上才视为本轮回血完成
   mp_rearm_percent: 12          # 回到该值以上才视为本轮回蓝完成

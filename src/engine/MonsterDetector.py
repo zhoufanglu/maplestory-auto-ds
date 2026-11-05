@@ -2342,7 +2342,7 @@ class MonsterDetector:
                     f"search=(noMob:{self._hunt_no_monster_frames},dir:{self._hunt_search_dir})"
                 )
 
-            # 宽度边界：任何移动模式下，绿点都不许超出黄色虚线（左右边界）。
+            # 宽度边界（最高优先级）：任何模式下（含攻击/跟路线），绿点都不许超出黄色虚线。
             boundary_pct = float(self.cfg.get("minimap", {}).get("width_boundary_pct", 0.0))
             if (0.0 < boundary_pct < 1.0
                     and self.loc_player_minimap is not None
@@ -2350,8 +2350,9 @@ class MonsterDetector:
                 mm_w = self.img_minimap.shape[1]
                 if mm_w > 0:
                     margin = mm_w * (1.0 - boundary_pct) / 2.0
-                    left_b = margin
-                    right_b = mm_w - margin
+                    buffer = max(2, int(mm_w * 0.03))  # 提前掉头，防止越线
+                    left_b = margin + buffer
+                    right_b = mm_w - margin - buffer
                     mx = self.loc_player_minimap[0]
                     if mx <= left_b and move_x in ("left", "face_left"):
                         move_x = "right"
