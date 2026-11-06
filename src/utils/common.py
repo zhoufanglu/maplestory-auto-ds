@@ -209,6 +209,21 @@ def nms(monsters: list, iou_threshold: float = 0.3) -> list:
     if not monsters:
         return []
 
+    # Fast path: use vectorized implementation. Falls back to legacy Python
+    # loop if anything goes wrong (e.g. malformed input, empty arrays).
+    try:
+        return nms_vectorized(monsters, iou_threshold)
+    except Exception:
+        return nms_legacy(monsters, iou_threshold)
+
+
+def nms_legacy(monsters: list, iou_threshold: float = 0.3) -> list:
+    """
+    Legacy Python-list NMS implementation.
+    """
+    if not monsters:
+        return []
+
     # Sort by score ascending (lower SQDIFF score = better match)
     sorted_monsters = sorted(monsters, key=lambda m: m["score"])
     keep = []
@@ -232,6 +247,57 @@ def nms(monsters: list, iou_threshold: float = 0.3) -> list:
         sorted_monsters = filtered
 
     return keep
+
+
+def nms_vectorized(monsters: list, iou_threshold: float = 0.3) -> list:
+    """
+    NumPy-vectorized Non-Maximum Suppression.
+
+    Produces the same ordering as nms_legacy but avoids the O(N²) Python
+    list rebuild. For typical N < 200 this is much faster.
+    """
+    if not monsters:
+        return []
+
+    n = len(monsters)
+    # Build arrays: x1, y1, x2, y2, score
+    boxes = np.empty((n, 5), dtype=np.float64)
+    for i, m in enumerate(monsters):
+        x, y = m["position"]
+        h, w = m["size"]
+        boxes[i, 0] = x
+        boxes[i, 1] = y
+        boxes[i, 2] = x + w
+        boxes[i, 3] = y + h
+        boxes[i, 4] = m["score"]
+
+    # Sort by score ascending (lower SQDIFF = better)
+    order = np.argsort(boxes[:, 4])
+    keep = []
+
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+
+        xx1 = np.maximum(x1[order[1:]], x1[i])
+        yy1 = np.maximum(y1[order[1:]], y1[i])
+        xx2 = np.minimum(x2[order[1:]], x2[i])
+        yy2 = np.minimum(y2[order[1:]], y2[i])
+
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        union = areas[order[1:]] + areas[i] - inter
+        iou = inter / np.maximum(union, 1e-8)
+
+        # Remove boxes with IoU > threshold, including identical boxes
+        mask = iou <= iou_threshold
+        order = order[1:][mask]
+
+    return [monsters[i] for i in keep]
 
 
 def get_iou(box1: tuple, box2: tuple) -> float:

@@ -68,6 +68,7 @@ title:
   white_upper: 255           # 白色二值化上限
   match_threshold: 0.3       # SQDIFF 匹配阈值 (0-1)，越小越严格，score低于此值视为匹配成功
   blur_kernel: 3             # 高斯模糊核大小，奇数
+  full_frame_interval: 5     # 每 N 帧做一次全屏称号候选收集；0=每帧
 
 # ---------------------------------------------------------------------------
 # 怪物检测设置
@@ -86,6 +87,9 @@ monster_detect:
   hp_bar_color: [0, 255, 0]  # 怪物血条 BGR 颜色
   display_scale: 0.55        # 监视器缩放比例 (0.3~1.0)
   detection_interval: 2      # 每隔 N 帧执行检测（1=每帧检测）
+  detection_downsample: 1    # 怪物模板匹配前对 ROI 下采样倍数（1=关闭，2/4可加速，但可能降低精度）
+  debug_overlay_interval: 1  # 每 N 帧刷新一次重型 debug overlay（HP/MP预览、路线预览、称号候选框）
+  interpolation: "nearest"   # 模板缩放插值：nearest / linear
 
 # ---------------------------------------------------------------------------
 # 方向攻击设置
@@ -130,6 +134,7 @@ route:
   climb_y_offset: 1             # 爬梯每N帧Y偏移量（像素），改小=梯子更短
   climb_y_interval: 15          # 每N帧偏移一次，改大=梯子更短
   climb_complement_dist: 3      # 爬梯时横向/垂直互补的距离上限（像素），防止竖直梯被远处无关颜色带偏方向
+  use_vectorized_scan: true    # 使用向量化路线颜色扫描（比 Python 循环快很多）
   color_code:
     "255,0,0": "left none none"         # 红: 向左走
     "0,0,255": "right none none"        # 蓝: 向右走

@@ -165,7 +165,7 @@ class HealthMonitor:
             return None, None, None
 
         with self.frame_lock:
-            img_frame = self.img_frame.copy()
+            img_frame = self.img_frame
 
         if img_frame is None or img_frame.size == 0:
             return None, None, None

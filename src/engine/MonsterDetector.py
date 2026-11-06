@@ -55,9 +55,10 @@ class MonsterDetector:
         self.test_image = test_image
 
         # Monster data
-        self.monsters_info: dict = {}   # {name: [(img, mask), ...]}
+        self.monsters_info: dict = {}   # {name: [(img, mask, gray, contour_mask), ...]}
         self.monster_cfg: dict = {}     # {name: {diff_thres, scales, ...}}
         self.monsters: list = []        # Detected monsters in current frame
+        self._tmpl_cache: dict = {}     # {(name, idx, scale): (tmpl, mask, th, tw, gray, contour)}
 
         # Frame data
         self.frame = None               # Raw captured frame
@@ -77,6 +78,7 @@ class MonsterDetector:
         self._pending_title_select_loc = None
         self._title_lock_miss_count = 0
         self._title_fixed = False       # F12 toggles: freeze the title box (and player pos)
+        self._title_full_frame_counter = 0  # Skip full-frame title candidate collection every N frames
 
         # Minimap
         self.loc_minimap = (0, 0)
@@ -213,6 +215,9 @@ class MonsterDetector:
         Returns:
             True if at least one monster was loaded successfully.
         """
+        self.monsters_info = {}
+        self._tmpl_cache = {}
+
         # Load specified monsters from config, or scan all directories.
         # monsters can be:
         #   - dict: {name: {diff_thres, scales, ...}}  (per-monster config)
@@ -254,12 +259,14 @@ class MonsterDetector:
             # Load all images + horizontally flipped copies (for both directions)
             for file in png_files:
                 try:
-                    img, mask = self._load_monster_template(file)
-                    imgs.append((img, mask))
+                    img, mask, img_gray, contour_mask = self._load_monster_template(file)
+                    imgs.append((img, mask, img_gray, contour_mask))
                     # Flipped copy for right-facing monsters
                     img_flip = cv2.flip(img, 1)
                     mask_flip = cv2.flip(mask, 1) if mask is not None else None
-                    imgs.append((img_flip, mask_flip))
+                    img_gray_flip = cv2.flip(img_gray, 1)
+                    contour_mask_flip = cv2.flip(contour_mask, 1)
+                    imgs.append((img_flip, mask_flip, img_gray_flip, contour_mask_flip))
                 except Exception as e:
                     logger.warning(f"Failed to load {file}: {e}")
 
@@ -292,7 +299,11 @@ class MonsterDetector:
           - BGR without special background: no mask, match full image
 
         Returns:
-            (img_bgr, mask) — mask is None if no masking needed
+            (img_bgr, mask, img_gray, contour_mask)
+              - img_bgr: color template
+              - mask: uint8 mask (None if no masking needed)
+              - img_gray: grayscale version for grayscale matching
+              - contour_mask: binary mask of black pixels for contour_only mode
         """
         raw = load_image(file, cv2.IMREAD_UNCHANGED)
 
@@ -312,7 +323,9 @@ class MonsterDetector:
             else:
                 mask = None  # No mask — match full image
 
-        return img, mask
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        contour_mask = np.all(img == [0, 0, 0], axis=2).astype(np.uint8) * 255
+        return img, mask, img_gray, contour_mask
 
     # -------------------------------------------------------------------
     # Frame capture
@@ -403,6 +416,13 @@ class MonsterDetector:
         monsters = []
         self.best_score = 1.0  # Reset each frame
 
+        # Optional downsample for faster template matching. 1 = disabled.
+        downsample = int(self.cfg["monster_detect"].get("detection_downsample", 1))
+        downsample = max(1, downsample)
+        if mode == "contour_only":
+            # Contour mode relies on exact black pixels; disable downsampling.
+            downsample = 1
+
         if mode == "template_free":
             monsters = self._detect_template_free(
                 img_roi, x0, y0, char_x_min, char_y_min,
@@ -411,17 +431,61 @@ class MonsterDetector:
         elif mode in ("color", "grayscale", "contour_only"):
             roi_h, roi_w = img_roi.shape[:2]
 
+            # Build downsampled ROI for matching
+            if downsample > 1:
+                img_roi_ds = cv2.resize(
+                    img_roi,
+                    (roi_w // downsample, roi_h // downsample),
+                    interpolation=cv2.INTER_LINEAR
+                )
+                scale_x = roi_w / img_roi_ds.shape[1]
+                scale_y = roi_h / img_roi_ds.shape[0]
+                # Adjust character exclusion box to downsampled space
+                char_x_min_ds = int(char_x_min / scale_x)
+                char_x_max_ds = int(char_x_max / scale_x)
+                char_y_min_ds = int(char_y_min / scale_y)
+                char_y_max_ds = int(char_y_max / scale_y)
+            else:
+                img_roi_ds = img_roi
+                scale_x = 1.0
+                scale_y = 1.0
+                char_x_min_ds, char_x_max_ds = char_x_min, char_x_max
+                char_y_min_ds, char_y_max_ds = char_y_min, char_y_max
+
+            # Precompute grayscale and contour masks once per ROI
+            img_roi_gray = None
+            img_roi_contour = None
+            if mode == "grayscale":
+                img_roi_gray = cv2.cvtColor(img_roi_ds, cv2.COLOR_BGR2GRAY)
+            elif mode == "contour_only":
+                img_roi_contour = np.all(img_roi_ds == [0, 0, 0], axis=2).astype(np.uint8) * 255
+
             for monster_name, monster_imgs in self.monsters_info.items():
-                for img_monster, mask_monster in monster_imgs:
+                for idx, (img_monster, mask_monster, img_monster_gray, contour_mask) in enumerate(monster_imgs):
                     th, tw = img_monster.shape[:2]
-                    if th > roi_h or tw > roi_w or tw < 10 or th < 10:
+                    # Skip templates that cannot possibly fit even at the largest scale
+                    m_cfg = self.monster_cfg.get(monster_name, {})
+                    scales = m_cfg.get("scales", self.cfg["monster_detect"].get("scales", [1.0]))
+                    max_scale = max(scales) if scales else 1.0
+                    if (tw * max_scale > roi_w or th * max_scale > roi_h
+                            or tw < 10 or th < 10):
                         continue
 
                     found = self._match_template(
-                        img_roi,
-                        img_monster, mask_monster,
-                        x0, y0, monster_name, mode,
-                        char_x_min, char_y_min, char_x_max, char_y_max
+                        img_roi_ds,
+                        img_roi_gray,
+                        img_roi_contour,
+                        x0, y0,
+                        monster_name, mode,
+                        char_x_min_ds, char_y_min_ds,
+                        char_x_max_ds, char_y_max_ds,
+                        scale_x=scale_x,
+                        scale_y=scale_y,
+                        img_monster=img_monster,
+                        mask_monster=mask_monster,
+                        img_monster_gray=img_monster_gray,
+                        contour_mask=contour_mask,
+                        img_index=idx,
                     )
                     monsters.extend(found)
         else:
@@ -459,17 +523,33 @@ class MonsterDetector:
     def _match_template(
         self,
         img_roi: np.ndarray,
-        img_monster: np.ndarray,
-        mask_monster: np.ndarray,
+        img_roi_gray: np.ndarray,
+        img_roi_contour: np.ndarray,
         x0: int, y0: int,
         monster_name: str,
         mode: str,
         char_x_min: int, char_y_min: int,
-        char_x_max: int, char_y_max: int
+        char_x_max: int, char_y_max: int,
+        scale_x: float = 1.0,
+        scale_y: float = 1.0,
+        img_monster: np.ndarray = None,
+        mask_monster: np.ndarray = None,
+        img_monster_gray: np.ndarray = None,
+        contour_mask: np.ndarray = None,
+        img_index: int = 0,
     ) -> list:
         """
         Match a single monster template against an ROI.
         Uses multi-scale matching and returns best matches.
+
+        Args:
+            img_roi: BGR ROI (possibly downsampled).
+            img_roi_gray: Grayscale version of img_roi.
+            img_roi_contour: Precomputed black-pixel mask of img_roi for contour_only mode.
+            x0, y0: ROI top-left offset in full frame (for output positions).
+            scale_x, scale_y: Scale factors from downsampled coordinates back to original frame.
+            img_monster, mask_monster, img_monster_gray, contour_mask: Template data.
+            img_index: Index of this template within the monster's image list, used for cache.
         """
         monsters = []
         m_cfg = self.monster_cfg.get(monster_name, {})
@@ -482,36 +562,78 @@ class MonsterDetector:
         # Multi-scale matching (per-monster scales override the global default)
         scales = m_cfg.get("scales", self.cfg["monster_detect"].get("scales", [1.0]))
 
+        # Pre-exclude character region in the contour ROI once per call
+        if img_roi_contour is not None:
+            img_roi_contour = img_roi_contour.copy()
+            img_roi_contour[char_y_min:char_y_max, char_x_min:char_x_max] = 0
+
+        # Pre-compute contour Gaussian blur once per call
+        contour_blur = self.cfg["monster_detect"].get("contour_blur", 5)
+        if mode == "contour_only" and img_roi_contour is not None:
+            img_roi_contour_blur = cv2.GaussianBlur(
+                img_roi_contour, (contour_blur, contour_blur), 0
+            )
+        else:
+            img_roi_contour_blur = None
+
         for scale in scales:
-            if scale == 1.0:
-                tmpl, msk, th, tw = img_monster, mask_monster, h, w
+            cache_key = (monster_name, img_index, scale)
+            cached = self._tmpl_cache.get(cache_key)
+            if cached is not None:
+                tmpl, msk, th, tw, tmpl_gray, tmpl_contour = cached
             else:
-                tw = max(8, int(w * scale))
-                th = max(8, int(h * scale))
-                tmpl = cv2.resize(img_monster, (tw, th), interpolation=cv2.INTER_NEAREST)
-                if mask_monster is not None:
-                    msk = cv2.resize(mask_monster, (tw, th), interpolation=cv2.INTER_NEAREST)
+                if scale == 1.0:
+                    tmpl = img_monster
+                    msk = mask_monster
+                    th, tw = h, w
+                    tmpl_gray = img_monster_gray
+                    tmpl_contour = contour_mask
                 else:
-                    msk = None
+                    tw = max(8, int(w * scale))
+                    th = max(8, int(h * scale))
+                    interp = self.cfg["monster_detect"].get("interpolation", "linear")
+                    if interp == "nearest":
+                        interpolation = cv2.INTER_NEAREST
+                    else:
+                        interpolation = cv2.INTER_LINEAR
+                    tmpl = cv2.resize(img_monster, (tw, th), interpolation=interpolation)
+                    if mask_monster is not None:
+                        msk = cv2.resize(mask_monster, (tw, th), interpolation=cv2.INTER_NEAREST)
+                    else:
+                        msk = None
+                    if img_monster_gray is not None:
+                        tmpl_gray = cv2.resize(img_monster_gray, (tw, th), interpolation=interpolation)
+                    else:
+                        tmpl_gray = None
+                    if contour_mask is not None:
+                        tmpl_contour = cv2.resize(contour_mask, (tw, th), interpolation=cv2.INTER_NEAREST)
+                    else:
+                        tmpl_contour = None
+                self._tmpl_cache[cache_key] = (tmpl, msk, th, tw, tmpl_gray, tmpl_contour)
+                tmpl_gray = tmpl_gray
+                tmpl_contour = tmpl_contour
+
+            # Skip if template bigger than ROI (defensive)
+            roi_h, roi_w = img_roi.shape[:2]
+            if th > roi_h or tw > roi_w:
+                continue
 
             try:
                 if mode == "contour_only":
-                    mask_pat = np.all(tmpl == [0, 0, 0], axis=2).astype(np.uint8) * 255
-                    mask_roi = np.all(img_roi == [0, 0, 0], axis=2).astype(np.uint8) * 255
-                    mask_roi[char_y_min:char_y_max, char_x_min:char_x_max] = 0
-                    blur = self.cfg["monster_detect"].get("contour_blur", 5)
+                    if img_roi_contour_blur is None or tmpl_contour is None:
+                        continue
                     res = cv2.matchTemplate(
-                        cv2.GaussianBlur(mask_roi, (blur, blur), 0),
-                        cv2.GaussianBlur(mask_pat, (blur, blur), 0),
+                        img_roi_contour_blur,
+                        cv2.GaussianBlur(tmpl_contour, (contour_blur, contour_blur), 0),
                         cv2.TM_SQDIFF_NORMED
                     )
                 elif mode == "grayscale":
-                    tmpl_gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
-                    roi_gray = cv2.cvtColor(img_roi, cv2.COLOR_BGR2GRAY)
+                    if tmpl_gray is None:
+                        continue
                     if msk is not None:
-                        res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED, mask=msk)
+                        res = cv2.matchTemplate(img_roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED, mask=msk)
                     else:
-                        res = cv2.matchTemplate(roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED)
+                        res = cv2.matchTemplate(img_roi_gray, tmpl_gray, cv2.TM_SQDIFF_NORMED)
                 elif mode == "color":
                     if msk is not None:
                         res = cv2.matchTemplate(img_roi, tmpl, cv2.TM_SQDIFF_NORMED, mask=msk)
@@ -522,7 +644,7 @@ class MonsterDetector:
             except cv2.error:
                 continue
 
-            # Track best score
+            # Track best score (in downsampled space, scale back not needed for comparison)
             min_val, _, _, _ = cv2.minMaxLoc(res)
             if min_val < self.best_score:
                 self.best_score = min_val
@@ -538,15 +660,17 @@ class MonsterDetector:
                 if count >= 50:
                     break
                 # Color guard: reject neutral gray/white patches (clouds, sky)
-                # by requiring enough color spread over the monster's pixels.
-                if msk is not None and min_spread > 0:
+                if msk is not None and min_spread > 0 and mode != "contour_only":
                     patch = img_roi[pt[1]:pt[1] + th, pt[0]:pt[0] + tw]
                     if self._color_spread(patch, msk) < min_spread:
                         continue
+                # Convert coordinates back to original frame resolution
+                orig_x = int(pt[0] * scale_x) + x0
+                orig_y = int(pt[1] * scale_y) + y0
                 monsters.append({
                     "name": monster_name,
-                    "position": (pt[0] + x0, pt[1] + y0),
-                    "size": (th, tw),
+                    "position": (orig_x, orig_y),
+                    "size": (int(th * scale_y), int(tw * scale_x)),
                     "score": res[pt[1], pt[0]],
                 })
                 count += 1
@@ -627,7 +751,7 @@ class MonsterDetector:
         min_monster_h = min(
             img.shape[0]
             for imgs in self.monsters_info.values()
-            for img, _ in imgs
+            for img, _, _, _ in imgs
         ) if self.monsters_info else 100
 
         for i in range(1, num_labels):
@@ -916,6 +1040,7 @@ class MonsterDetector:
             self._title_lock_miss_count = 0
         self.loc_title = None
         self._title_last_seen_frame = -1
+        self._title_full_frame_counter = 0
         logger.info("[Title] Cleared manual title selection")
 
     def _draw_title_candidates(self):
@@ -1022,6 +1147,7 @@ class MonsterDetector:
                 and self._title_last_seen_frame >= 0
                 and self.frame_count - self._title_last_seen_frame > cache_ttl):
             self.loc_title = None
+            self._title_full_frame_counter = 0
 
         had_lock = self.loc_title is not None
 
@@ -1098,17 +1224,38 @@ class MonsterDetector:
             fh, fw = img_roi_proc.shape[:2]
 
             center_anchor = (max(0, fw // 2 - tw // 2), max(0, fh // 2 - th // 2))
-            candidate_pool = self._collect_title_candidates(
-                img_roi_proc, img_title_proc,
-                max_candidates=max_candidates,
-                score_threshold=candidate_threshold,
+
+            # Stable-lock optimization: when we already have a title lock and no
+            # manual lock is active, skip the expensive full-frame candidate
+            # collection on most frames. Local prev/center searches below still
+            # run, so rapid movement is still tracked.
+            full_frame_interval = int(title_cfg.get("full_frame_interval", 5))
+            skip_full_frame = (
+                full_frame_interval > 0
+                and self.loc_title is not None
+                and not self._manual_title_locked
+                and self._title_full_frame_counter % full_frame_interval != 0
             )
-            self._update_title_candidates_snapshot(candidate_pool, (tw, th))
+            self._title_full_frame_counter += 1
+
+            if skip_full_frame:
+                candidate_pool = []
+                # Preserve the last snapshot for debug / click selection.
+                if not getattr(self, "_title_candidates_snapshot", None):
+                    self._update_title_candidates_snapshot([], (tw, th))
+            else:
+                candidate_pool = self._collect_title_candidates(
+                    img_roi_proc, img_title_proc,
+                    max_candidates=max_candidates,
+                    score_threshold=candidate_threshold,
+                )
+                self._update_title_candidates_snapshot(candidate_pool, (tw, th))
             # 始终记录称号最佳匹配相似度（右下角显示用）。
-            self.title_sim = (
-                max(0.0, min(1.0, 1.0 - candidate_pool[0]["score"]))
-                if candidate_pool else None
-            )
+            # 当跳过全屏候选收集时，保留上一帧的相似度，避免显示闪烁。
+            if candidate_pool:
+                self.title_sim = max(0.0, min(1.0, 1.0 - candidate_pool[0]["score"]))
+            elif self.title_sim is None:
+                self.title_sim = None
 
             with self._title_state_lock:
                 if self._pending_title_select_loc is not None:
@@ -1541,6 +1688,18 @@ class MonsterDetector:
         if search_range is None:
             search_range = self.cfg["route"].get("search_range", 10)
 
+        use_vectorized = bool(self.cfg.get("route", {}).get("use_vectorized_scan", True))
+        if use_vectorized:
+            try:
+                return self._get_nearest_route_color_vectorized(route_img, x0, y0, search_range)
+            except Exception as e:
+                logger.debug(f"[Route] Vectorized scan failed, falling back to Python loop: {e}")
+
+        return self._get_nearest_route_color_loop(route_img, x0, y0, search_range)
+
+    def _get_nearest_route_color_loop(self, route_img, x0, y0, search_range):
+        """Original Python-loop implementation (kept as fallback)."""
+        h, w = route_img.shape[:2]
         x_min = max(0, x0 - search_range)
         x_max = min(w, x0 + search_range)
         y_min = max(0, y0 - search_range)
@@ -1562,6 +1721,71 @@ class MonsterDetector:
                     nearest_ud = {"pixel": (x, y), "command": self.color_code_up_down[pixel], "distance": dist}
                     min_dist_ud = dist
 
+        return nearest, nearest_ud
+
+    def _get_nearest_route_color_vectorized(self, route_img, x0, y0, search_range):
+        """
+        Vectorized route color scan.
+
+        Finds the nearest pixel within the search window whose color is present
+        in color_code or color_code_up_down, returning the same dict format as
+        the Python-loop version.
+        """
+        h, w = route_img.shape[:2]
+        x_min = max(0, x0 - search_range)
+        x_max = min(w, x0 + search_range)
+        y_min = max(0, y0 - search_range)
+        y_max = min(h, y0 + search_range)
+
+        if x_max <= x_min or y_max <= y_min:
+            return None, None
+
+        crop = route_img[y_min:y_max, x_min:x_max]
+        # Build coordinate grids for the cropped window
+        ys = np.arange(y_min, y_max)
+        xs = np.arange(x_min, x_max)
+        yy, xx = np.meshgrid(ys, xs, indexing="ij")
+        dx = np.abs(xx - x0)
+        dy = np.abs(yy - y0)
+        manhattan = dx + dy
+
+        nearest = None
+        nearest_ud = None
+
+        def _nearest_for_colors(color_dict):
+            if not color_dict:
+                return None
+            mask = np.zeros(crop.shape[:2], dtype=bool)
+            colors = list(color_dict.keys())
+            if len(colors) == 1:
+                mask = np.all(crop == colors[0], axis=2)
+            else:
+                # Vectorized membership: stack equality masks for each color.
+                eq = np.stack([np.all(crop == c, axis=2) for c in colors], axis=0)
+                mask = np.any(eq, axis=0)
+
+            if not np.any(mask):
+                return None
+
+            min_dist = np.min(manhattan[mask])
+            # Among all pixels with min distance, pick the first one.
+            candidates = np.argwhere(manhattan == min_dist)
+            # Filter to those that are also matching colors
+            matching_candidates = []
+            for cy, cx in candidates:
+                if mask[cy, cx]:
+                    matching_candidates.append((cy + y_min, cx + x_min))
+                    break
+            if not matching_candidates:
+                return None
+
+            y_match, x_match = matching_candidates[0]
+            pixel = tuple(route_img[y_match, x_match])
+            command = color_dict.get(pixel)
+            return {"pixel": (x_match, y_match), "command": command, "distance": int(min_dist)}
+
+        nearest = _nearest_for_colors(self.color_code)
+        nearest_ud = _nearest_for_colors(self.color_code_up_down)
         return nearest, nearest_ud
 
     def _select_best_route(self):
@@ -1923,8 +2147,17 @@ class MonsterDetector:
             return "none", "none", "none"
         return "none", "none", "none"
 
+    def _should_update_heavy_overlay(self) -> bool:
+        """Return True if heavy debug overlay elements should be re-rendered."""
+        interval = int(self.cfg.get("monster_detect", {}).get("debug_overlay_interval", 1))
+        if interval <= 1:
+            return True
+        return self.frame_count % interval == 0
+
     def _update_debug_overlay(self):
         """Add FPS, HP/MP/EXP, and status info to the debug frame."""
+
+        update_heavy = self._should_update_heavy_overlay()
 
         # --- HP / MP / EXP display (top-right) ---
         if self.health_monitor is not None:
@@ -1932,11 +2165,11 @@ class MonsterDetector:
             bar_count = self.cfg.get("health_monitor", {}).get("bar_count", 3)
             if bar_count == 2:
                 bar_labels = [("HP", hm.hp_percent, (0, 0, 255), hm.enable_hp),
-                              ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp)]
+                               ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp)]
             else:
                 bar_labels = [("HP", hm.hp_percent, (0, 0, 255), hm.enable_hp),
-                              ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp),
-                              ("EXP", hm.exp_percent, (0, 255, 0), True)]
+                               ("MP", hm.mp_percent, (255, 0, 0), hm.enable_mp),
+                               ("EXP", hm.exp_percent, (0, 255, 0), True)]
             fw = self.img_frame.shape[1]
             x_s = fw - 220  # Right-aligned
             y_s = 30
@@ -1950,8 +2183,8 @@ class MonsterDetector:
                     (x_s, y_s + 30 * i),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA
                 )
-                # Bar preview to the left of text
-                if i < len(hm.loc_size_bars):
+                # Bar preview to the left of text — heavy operation, throttle it.
+                if update_heavy and i < len(hm.loc_size_bars):
                     bx, by, bw, bh = hm.loc_size_bars[i]
                     if bw > 0 and bh > 0:
                         # loc_size_bars 现在存的是完整画面坐标，直接用完整帧预览
@@ -2076,7 +2309,8 @@ class MonsterDetector:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (42, 42, 165), 2, cv2.LINE_AA
             )
 
-        self._draw_title_candidates()
+        if update_heavy:
+            self._draw_title_candidates()
         self._draw_appearance_debug()
 
     # -------------------------------------------------------------------
@@ -2408,7 +2642,8 @@ class MonsterDetector:
                         )
 
             # Route minimap preview on right-middle; keep clear of top-right stats.
-            if self.img_route is not None and self.loc_player_global != (0.0, 0.0):
+            if (self.img_route is not None and self.loc_player_global != (0.0, 0.0)
+                    and self._should_update_heavy_overlay()):
                 route_bgr = cv2.cvtColor(self.img_route, cv2.COLOR_RGB2BGR)
                 gx, gy = int(self.loc_player_global[0]), int(self.loc_player_global[1])
                 crop_w, crop_h = 80, 80
