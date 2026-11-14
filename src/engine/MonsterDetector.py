@@ -2588,14 +2588,26 @@ class MonsterDetector:
                     left_b = margin + buffer
                     right_b = mm_w - margin - buffer
                     mx = self.loc_player_minimap[0]
-                    if mx <= left_b and move_x in ("left", "face_left"):
-                        move_x = "right"
-                        if not self.is_on_ladder:
-                            move_y = "none"
-                    elif mx >= right_b and move_x in ("right", "face_right"):
-                        move_x = "left"
-                        if not self.is_on_ladder:
-                            move_y = "none"
+                    # hunt 模式碰到黄线：无条件往回走并停止攻击（优先级高于攻击动作）。
+                    # 非 hunt 模式保持原逻辑：仅在朝外走时掉头，避免误触发移动。
+                    if mx <= left_b:
+                        if mode == "hunt" or move_x in ("left", "face_left"):
+                            move_x = "right"
+                            if not self.is_on_ladder:
+                                move_y = "none"
+                            if mode == "hunt" and action in ("attack", "aoe"):
+                                action = "none"
+                                if self.frame_count % 30 == 0:
+                                    logger.info("[Boundary] 碰左黄线，停止攻击并向右走回黄线内")
+                    elif mx >= right_b:
+                        if mode == "hunt" or move_x in ("right", "face_right"):
+                            move_x = "left"
+                            if not self.is_on_ladder:
+                                move_y = "none"
+                            if mode == "hunt" and action in ("attack", "aoe"):
+                                action = "none"
+                                if self.frame_count % 30 == 0:
+                                    logger.info("[Boundary] 碰右黄线，停止攻击并向左走回黄线内")
 
             self._kb.set_command(f"{move_x} {move_y} {action}")
 

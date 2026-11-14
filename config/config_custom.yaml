@@ -18,14 +18,14 @@ key:
   add_mp: "home"
   pickup: "z"                 # 拾取键
   jump_hold_up_seconds2: 2.0   # 按跳跃键时同时按住 up 的时长（秒），抓绳用；0=关闭
-
+  
 pickup:
   enable: true                # 移动时自动拾取
   cooldown: 0.3               # 拾取按键间隔（秒）
 
 buff_skill:
-  keys: ["2"]                # 自动加的 buff 技能键
-  cooldown: [120]            # 每个键的冷却时间（秒），顺序和 keys 一致
+  keys: ["2","3"]                # 自动加的 buff 技能键
+  cooldown: [120,1200]            # 每个键的冷却时间（秒），顺序和 keys 一致
   action_cooldown: 1         # 放完 buff 后延迟多久再继续别的动作（秒）
   freeze_seconds: 1.5        # 放 buff 时停止攻击/移动，人物冻结这么久（秒）
   startup_delay: 2           # 脚本启动后延迟多久才执行第一次 buff（秒）
