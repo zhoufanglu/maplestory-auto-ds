@@ -102,6 +102,7 @@ class MonsterDetector:
         self._last_pmm = None   # Last player minimap position (for displacement tracking)
         self.is_on_ladder = False
         self._route_miss_frames = 0  # consecutive frames with no nearby route color
+        self._route_switch_lock_until = 0.0  # goal 切换后短暂禁止 auto-select，防止切回含 goal 的路线
 
         # Stuck recovery (walk left when the character hasn't moved for a while)
         self._stuck_last_pos = None
@@ -1792,6 +1793,9 @@ class MonsterDetector:
         """Select the route image nearest to the current global player position."""
         if not self.img_routes or self.loc_player_global == (0.0, 0.0):
             return
+        # goal 刚切换后短暂锁定路线，避免 auto-select 立刻根据「脚下 goal 更近」切回上一段
+        if time.time() < self._route_switch_lock_until:
+            return
 
         search_range = int(self.cfg.get("route", {}).get("search_range", 10))
         auto_select_range = int(self.cfg.get("route", {}).get("auto_select_range", max(30, search_range * 4)))
@@ -1861,6 +1865,8 @@ class MonsterDetector:
         if self.cmd_action == "goal" and self.img_routes:
             self.idx_routes = (self.idx_routes + 1) % len(self.img_routes)
             self.img_route = self.img_routes[self.idx_routes]
+            # 锁定 auto-select 2 秒，让角色沿下一段路线离开 goal 点，避免被切回上一段
+            self._route_switch_lock_until = time.time() + 2.0
             if self.frame_count % 30 == 0:
                 logger.info(f"[Route] Goal reached → route {self.idx_routes + 1}/{len(self.img_routes)}")
 
@@ -2363,8 +2369,10 @@ class MonsterDetector:
                 )
 
             # 绿点卡住超时重定位：超过 dot_stuck_seconds 没动，重置重新定位。
+            # detect 模式人物静止（绿点本就不动），跳过，避免反复重置。
             stuck_seconds = float(self.cfg.get("minimap", {}).get("dot_stuck_seconds", 3.0))
             if (stuck_seconds > 0
+                    and self.cfg.get("bot", {}).get("mode", "detect") != "detect"
                     and self.loc_player_minimap is not None
                     and time.time() - self._dot_last_move_time >= stuck_seconds):
                 logger.info("[Dot] 绿点卡住超时，重置重新定位")
@@ -2540,9 +2548,10 @@ class MonsterDetector:
 
             # 卡墙角/卡住恢复：原地没动超时 → 反方向走2秒脱困。
             # 跟路线用全局坐标；无路线(找怪)用小地图坐标判断是否卡住。
+            # detect 模式人物本就不动，跳过，避免误触发移动。
             now = time.time()
             scfg = self.cfg.get("stuck_recovery", {})
-            if scfg.get("enable", True):
+            if scfg.get("enable", True) and mode != "detect":
                 if follow_route:
                     cur_pos = self.loc_player_global
                 elif self.loc_player_minimap is not None:

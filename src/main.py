@@ -85,6 +85,18 @@ def main():
     else:
         logger.info(f"  No custom config found at {custom_cfg_path}")
 
+    # 按地图加载 minimap / monster_detect 配置（map_config.yaml 第一层是地图名）
+    map_name = cfg.get("bot", {}).get("map", "")
+    map_config_path = "config/map_config.yaml"
+    if map_name and os.path.exists(map_config_path):
+        map_cfg_all = load_yaml(map_config_path)
+        map_cfg = map_cfg_all.get(map_name)
+        if map_cfg:
+            cfg = override_cfg(cfg, map_cfg)
+            logger.info(f"  Applied map config: {map_name}")
+        else:
+            logger.warning(f"  Map '{map_name}' not found in {map_config_path}")
+
     if args.disable_viz:
         cfg["disable_viz"] = True
         logger.info("  Debug visualization: disabled")

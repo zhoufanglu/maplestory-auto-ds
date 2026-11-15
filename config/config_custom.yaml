@@ -1,7 +1,8 @@
 bot:
   mode: "hunt" # detect = 只检测不攻击, hunt = 路线挂机
+  auto_buff: true                 # 自动加 buff 开关 true=开 false=关
   attack: "directional"
-  map: "duoluozhuyi" #duoluozhuyi dongbu3
+  map: "dong_bu_yan_shan_V" #duoluozhuyi dong_bu_yan_shan_V
   enable_route: true
   warning: true               # 测谎报警开关 true=开 false=关
 
@@ -25,7 +26,7 @@ pickup:
 
 buff_skill:
   keys: ["2","3"]                # 自动加的 buff 技能键
-  cooldown: [120,1200]            # 每个键的冷却时间（秒），顺序和 keys 一致
+  cooldown: [120, 1200]            # 每个键的冷却时间（秒），顺序和 keys 一致
   action_cooldown: 1         # 放完 buff 后延迟多久再继续别的动作（秒）
   freeze_seconds: 1.5        # 放 buff 时停止攻击/移动，人物冻结这么久（秒）
   startup_delay: 2           # 脚本启动后延迟多久才执行第一次 buff（秒）
@@ -61,53 +62,16 @@ appearance:
   hold_frames: 20                 # 外观短暂丢失(如攻击动画)时，沿用上次外观位置多少帧再回退称号
   gate_radius: 90                 # 称号位置与外观位置差超过此值，改用外观定位
   feet_offset: [0, -6]            # 外观模板底部中心 → 脚底偏移 [x, y]
-#  这个是魔法密林 北部2的 位置 先存下
-#  x: 10
-#  y: 149
-#  width: 189
-#  height: 144
-############################
 minimap:
- #fixed: true                    # true=用下面固定坐标(不自动白框检测)，窗口大小固定时更准
-  # dongbu3
-#  x: 17
-#  y: 130
-#  width: 166
-#  height: 149
-  # 堕落主义
-  x: 23
-  y: 130
-  width: 122
-  height: 106
+  # 地图坐标(x/y/width/height)与黄线边界(width_boundary_pct)在 config/map_config.yaml，按 bot.map 自动加载
   player_color: [136, 255, 255]   # 玩家小黄点 BGR (#ffff88 → 136,255,255)
   player_tolerance: 8            # 颜色容差起始值（会自动扩大到+30）
   player_max_jump_px: 30         # 新检测点离上次位置超过此距离就不更新（防跳到传送门等静止标记）
   dot_stuck_seconds: 3.0         # 绿点超过多少秒没动就重置重新定位（0=关闭）
-  width_boundary_pct: 0.6        # 角色只能在中部这个比例(30%~70%)内移动，0=关闭
 
 monster_detect:
-  # 每个怪物文件夹单独配置：diff_thres / scales / min_color_spread
-  # （没单独配的属性，回退用下面全局的 diff_thres / scales / min_color_spread）
-  monsters:
-    zhang_yu:
-      diff_thres: 0.302
-      scales: [1.1, 1.2]
-    lan_mo_gu:
-        diff_thres: 0.20
-        scales: [1.1]
-#    fu_mu_yao:
-#      diff_thres: 0.42
-#      scales: [1.1, 1.2]
-#    black_axe_stump:
-#      diff_thres: 0.44
-#      scales: [1.1, 1.2]
-#      min_color_spread: 0      # 暗色怪物纯度低，单独调低（默认30会把它过滤掉）
-#      OrangeMushroom2:
-#      diff_thres: 0.22z
-#      scales: [1.1]
+  # 怪物列表(monsters)与各图 diff_thres/scales 在 config/map_config.yaml，按 bot.map 自动加载
   mode: "color"                     # colaor / grayscale / contour_only
-  diff_thres: 0.25            # 全局默认匹配阈值 0.0~1.0（越小越严格）
-  scales: [1.1]                 # 全局默认缩放比例数组 [0.5~1.5]
   display_scale: 0.47               # 监视器缩放 0.1~1.0（越小越流畅）0.47
   detection_interval: 2             # 每N帧检测一次 1~5（1=每帧，越大越流畅）
   with_enemy_hp_bar: true           # 通过怪物血条辅助检测（防掉落物遮挡）

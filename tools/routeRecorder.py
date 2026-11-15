@@ -82,6 +82,17 @@ class RouteRecorder:
             self.cfg = override_cfg(self.cfg, load_yaml(custom_path))
             logger.info(f"  Applied: {custom_path}")
 
+        # 按地图加载 minimap 配置（map_config.yaml 第一层是地图名），录制用 --new_map 对应的坐标
+        map_config_path = "config/map_config.yaml"
+        if os.path.exists(map_config_path):
+            map_cfg_all = load_yaml(map_config_path)
+            map_cfg = map_cfg_all.get(args.new_map)
+            if map_cfg:
+                self.cfg = override_cfg(self.cfg, map_cfg)
+                logger.info(f"  Applied map config: {args.new_map}")
+            else:
+                logger.warning(f"  Map '{args.new_map}' not found in {map_config_path}")
+
         # Parse color codes: "R,G,B" string -> (R,G,B) int tuple -> action
         self.color_code = {}
         for k, v in self.cfg["route"]["color_code"].items():

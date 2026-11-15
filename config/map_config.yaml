@@ -1,0 +1,55 @@
+# ============================================================================
+# 地图配置：按地图名分组，每组是该地图的 minimap 坐标 与 monster_detect 配置
+# 用法：在 config/config_custom.yaml 的 bot.map 填地图名，启动时自动加载对应配置
+# （深合并进全局配置：地图里没写的字段，回退用 config_custom / config_default 的默认值）
+# ============================================================================
+
+duoluozhuyi:                        # 堕落主义
+  minimap:
+    x: 23
+    y: 130
+    width: 122
+    height: 106
+    width_boundary_pct: 0.6         # 黄线边界：角色只能在中部这个比例内移动（0=关闭）
+  monster_detect:
+    # 每个怪物文件夹单独配置：diff_thres / scales
+    # （没单独配的属性，回退用本图 monster_detect.diff_thres / scales）
+    monsters:
+      zhang_yu:
+        diff_thres: 0.302
+        scales: [1.1, 1.2]
+      lan_mo_gu:
+        diff_thres: 0.20
+        scales: [1.1]
+    diff_thres: 0.25                # 本图全局默认匹配阈值 0.0~1.0（越小越严格）
+    scales: [1.1]                   # 本图全局默认缩放比例数组
+
+ # 东部4
+dong_bu_yan_shan_V:
+  minimap:
+    x: 18
+    y: 130
+    width: 162
+    height: 134
+    width_boundary_pct: 0.8         # 黄线边界：角色只能在中部这个比例内移动（0=关闭）
+  monster_detect:
+    monsters:
+      mu_tou:
+        diff_thres: 0.2
+        scales: [ 1]
+#      hei_fu_mu_yao:
+#        diff_thres: 0.45
+#        scales: [ 0.9, 1]
+#      fu_mu_yao:
+#        diff_thres: 0.45
+#        scales: [ 0.9, 1]
+
+# 魔法密林 北部2（备用，坐标先存下）
+# beibu2:
+#   minimap:
+#     x: 10
+#     y: 149
+#     width: 189
+#     height: 144
+#   monster_detect:
+#     monsters: {}

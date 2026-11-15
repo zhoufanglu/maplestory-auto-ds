@@ -239,8 +239,8 @@ class KeyBoardController:
             self._limit_fps()
 
     def _apply_buff(self):
-        """自动加 buff：仅在 hunt 模式，按各 buff 键的冷却时间按下。"""
-        if self.cfg.get("bot", {}).get("mode", "detect") != "hunt":
+        """自动加 buff：由顶层 auto_buff 开关控制，按各 buff 键的冷却时间按下。"""
+        if not self.cfg.get("bot", {}).get("auto_buff", False):
             return
         # 启动延迟：脚本启动后 startup_delay 秒内不执行 buff。
         if time.time() < self._buff_ready_time:

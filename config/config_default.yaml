@@ -10,6 +10,7 @@
 # ---------------------------------------------------------------------------
 bot:
   mode: "detect"          # "detect" = 仅检测并可视化, "hunt" = 路线挂机
+  auto_buff: false        # 自动加 buff 开关 true=开 false=关
   attack: "directional"   # "directional" (方向攻击) 或 "aoe_skill" (范围攻击)
   map: ""                 # 地图名称（可选）
   enable_route: false     # 是否启用路线跟随
