@@ -54,7 +54,7 @@ title:
   blur_kernel: 3
 
 appearance:
-  enable: true                    # 用角色外观(fashi.png)辅助定位，防称号丢失/冲突
+  enable: false                   # 用角色外观(fashi.png)辅助定位，防称号丢失/冲突
   template: "character/fashi.png"
   search_radius: 140              # 在上次角色位置附近搜索外观的半径(像素)
   center_fallback_radius: 260     # 无历史位置时围绕屏幕中心搜索
