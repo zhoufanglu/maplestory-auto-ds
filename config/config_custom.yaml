@@ -1,9 +1,9 @@
 bot:
-  mode: "hunt" # detect = 只检测不攻击, hunt = 路线挂机
-  auto_buff: true                 # 自动加 buff 开关 true=开 false=关
+  mode: "detect" # detect = 只检测不攻击, hunt = 路线挂机
+  auto_buff: true                  # 自动加 buff 开关 true=开 false=关
   attack: "directional"
-  map: "dong_bu_yan_shan_V" #duoluozhuyi dong_bu_yan_shan_V
-  enable_route: true
+  map: "hou_zi_3" #duoluozhuyi dong_bu_yan_shan_V hou_zi_3
+  enable_route: false
   warning: true               # 测谎报警开关 true=开 false=关
 
 system:

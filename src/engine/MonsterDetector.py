@@ -2618,6 +2618,43 @@ class MonsterDetector:
                                 if self.frame_count % 30 == 0:
                                     logger.info("[Boundary] 碰右黄线，停止攻击并向左走回黄线内")
 
+            # 攻击区域限制（最高优先级，仅 hunt 模式）：is_attack_in_area 打开时，绿点越出矩形立即走回区域内。
+            area_cfg = self.cfg.get("attack_in_area", {})
+            if (mode == "hunt"
+                    and area_cfg.get("is_attack_in_area", False)
+                    and self.loc_player_minimap is not None
+                    and self.img_minimap is not None):
+                ax = float(area_cfg.get("x", 0))
+                ay = float(area_cfg.get("y", 0))
+                aw = float(area_cfg.get("width", 0))
+                ah = float(area_cfg.get("height", 0))
+                if aw > 0 and ah > 0:
+                    mx, my = self.loc_player_minimap
+                    left_a, right_a = ax, ax + aw
+                    top_a, bottom_a = ay, ay + ah
+                    if self.frame_count % 30 == 0:
+                        logger.info(
+                            f"[Area] player=({mx},{my}) box=[{left_a:.0f},{right_a:.0f}]x[{top_a:.0f},{bottom_a:.0f}] "
+                            f"out={'L' if mx <= left_a else 'R' if mx >= right_a else 'N'}"
+                        )
+                    # 越界无条件往回走，并停止攻击（优先回到区域内）
+                    if mx <= left_a:
+                        move_x = "right"
+                        if not self.is_on_ladder:
+                            move_y = "none"
+                        if action in ("attack", "aoe"):
+                            action = "none"
+                    elif mx >= right_a:
+                        move_x = "left"
+                        if not self.is_on_ladder:
+                            move_y = "none"
+                        if action in ("attack", "aoe"):
+                            action = "none"
+                    if my <= top_a and move_y == "up":
+                        move_y = "down"
+                    elif my >= bottom_a and move_y == "down":
+                        move_y = "up"
+
             self._kb.set_command(f"{move_x} {move_y} {action}")
 
         # Always draw decorations on debug frame
@@ -2661,6 +2698,69 @@ class MonsterDetector:
                             f"size={mm_w}x{mm_h} pct={boundary_pct} "
                             f"left_x={self.loc_minimap[0] + margin:.1f} right_x={self.loc_minimap[0] + mm_w - margin:.1f}"
                         )
+                # 攻击区域：画绿色虚线矩形（标记攻击范围）
+                area_cfg = self.cfg.get("attack_in_area", {})
+                if area_cfg.get("is_attack_in_area", False):
+                    ax = float(area_cfg.get("x", 0))
+                    ay = float(area_cfg.get("y", 0))
+                    aw = float(area_cfg.get("width", 0))
+                    ah = float(area_cfg.get("height", 0))
+                    if aw > 0 and ah > 0:
+                        x0 = self.loc_minimap[0] + ax
+                        y0 = self.loc_minimap[1] + ay
+                        x1 = x0 + aw
+                        y1 = y0 + ah
+                        dash_len, gap_len = 8, 5
+                        # 上下两条横边
+                        for yy in (y0, y1):
+                            x = x0
+                            while x < x1:
+                                cv2.line(self.img_frame_debug, (int(x), int(yy)),
+                                         (int(min(x + dash_len, x1)), int(yy)), (0, 255, 0), 2)
+                                x += dash_len + gap_len
+                        # 左右两条竖边
+                        for xx in (x0, x1):
+                            y = y0
+                            while y < y1:
+                                cv2.line(self.img_frame_debug, (int(xx), int(y)),
+                                         (int(xx), int(min(y + dash_len, y1))), (0, 255, 0), 2)
+                                y += dash_len + gap_len
+
+            # 攻击区域投影到游戏主画面（以角色为锚点，正确标记攻击区域世界位置，和判定一致）
+            area_cfg = self.cfg.get("attack_in_area", {})
+            if (area_cfg.get("is_attack_in_area", False)
+                    and self.loc_player_minimap is not None
+                    and self.loc_player != (0, 0)):
+                ax = float(area_cfg.get("x", 0))
+                ay = float(area_cfg.get("y", 0))
+                aw = float(area_cfg.get("width", 0))
+                ah = float(area_cfg.get("height", 0))
+                scale = float(area_cfg.get("screen_scale", 0.0))
+                if scale <= 0:
+                    # 自动估算缩放：小地图 ≈ 一屏缩略图 → 缩放 = 游戏画面宽 / 小地图宽
+                    mm_w = self.img_minimap.shape[1] if self.img_minimap is not None else 0
+                    scale = (self.img_frame.shape[1] / mm_w) if mm_w > 0 else 1.0
+                if aw > 0 and ah > 0 and scale > 0:
+                    px, py = self.loc_player
+                    left = px + (ax - self.loc_player_minimap[0]) * scale
+                    right = px + (ax + aw - self.loc_player_minimap[0]) * scale
+                    top = py + (ay - self.loc_player_minimap[1]) * scale
+                    bottom = py + (ay + ah - self.loc_player_minimap[1]) * scale
+                    dash_len, gap_len = 10, 6
+                    # 上下两条横边
+                    for yy in (top, bottom):
+                        x = left
+                        while x < right:
+                            cv2.line(self.img_frame_debug, (int(x), int(yy)),
+                                     (int(min(x + dash_len, right)), int(yy)), (0, 255, 0), 2)
+                            x += dash_len + gap_len
+                    # 左右两条竖边
+                    for xx in (left, right):
+                        y = top
+                        while y < bottom:
+                            cv2.line(self.img_frame_debug, (int(xx), int(y)),
+                                     (int(xx), int(min(y + dash_len, bottom))), (0, 255, 0), 2)
+                            y += dash_len + gap_len
 
             # Route minimap preview on right-middle; keep clear of top-right stats.
             if (self.img_route is not None and self.loc_player_global != (0.0, 0.0)
