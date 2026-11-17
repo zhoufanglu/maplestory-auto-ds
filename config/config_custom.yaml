@@ -2,7 +2,7 @@ bot:
   mode: "detect" # detect = 只检测不攻击, hunt = 路线挂机
   auto_buff: true                  # 自动加 buff 开关 true=开 false=关
   attack: "directional"
-  map: "hou_zi_3" #duoluozhuyi dong_bu_yan_shan_V hou_zi_3
+  map: "ping_yuan_3" #duoluozhuyi dong_bu_yan_shan_V hou_zi_3 ping_yuan_3
   enable_route: false
   warning: true               # 测谎报警开关 true=开 false=关
 
@@ -81,7 +81,7 @@ monster_detect:
 
 directional_attack:
   attack_in_place: false            # 原地攻击：不移动持续攻击（刷固定点用）
-  range_x: 300                     # 水平攻击范围（像素）——左右距离，调大打得远
+  range_x: 150                     # 水平攻击范围（像素）——左右距离，调大打得远
   range_y: 40                      # 垂直攻击范围（像素）——上下距离
   face_tap_duration: 0.3           # 转身点按时长（秒），太短游戏识别不到会打反方向
   face_deadzone_px: 50             # 怪物离玩家多近就停步攻击（像素），朝怪物走时用到
