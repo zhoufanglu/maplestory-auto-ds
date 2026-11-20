@@ -10,6 +10,7 @@ import pyautogui
 from pynput.keyboard import Key, Controller as KBController
 
 from src.utils.logger import logger
+from src.utils.common import is_game_window_foreground, get_game_window_title_by_token
 
 pyautogui.FAILSAFE = False
 _pynput_kb = KBController()
@@ -90,6 +91,12 @@ class KeyBoardController:
         self.cfg = cfg
         self.is_enable = True
         self.is_terminated = False
+
+        # 游戏窗口标题 + 前台状态（避免按键误发到其他窗口）
+        self.window_title = get_game_window_title_by_token(
+            cfg.get("game_window", {}).get("title", "")
+        )
+        self._was_foreground = True
 
         # Key bindings
         key_cfg = cfg.get("key", {})
@@ -228,14 +235,27 @@ class KeyBoardController:
             self._last_action = "add_mp"
         return ok
 
+    def _is_game_foreground(self) -> bool:
+        """Return True if the game window is currently focused."""
+        if not self.window_title:
+            return True  # 没拿到窗口标题就不限制，保持原行为
+        return is_game_window_foreground(self.window_title)
+
     def _run(self):
         """Daemon loop — applies left/right, up/down, action, pickup, and buff commands."""
         while not self.is_terminated:
             if self.is_enable:
-                self._apply_movement()
-                self._apply_action()
-                self._apply_pickup()
-                self._apply_buff()
+                if self._is_game_foreground():
+                    self._apply_movement()
+                    self._apply_action()
+                    self._apply_pickup()
+                    self._apply_buff()
+                    self._was_foreground = True
+                else:
+                    # 前台不是游戏窗口：释放一次按键，避免误输入到其他窗口
+                    if self._was_foreground:
+                        self.release_all()
+                        self._was_foreground = False
             self._limit_fps()
 
     def _apply_buff(self):

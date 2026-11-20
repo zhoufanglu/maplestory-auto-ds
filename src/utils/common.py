@@ -474,6 +474,23 @@ if is_windows():
         except Exception as e:
             logger.warning(f"[resize_window] Failed: {e}")
 
+
+    def is_game_window_foreground(window_title: str) -> bool:
+        """
+        Return True if the current foreground window's title contains window_title.
+
+        Used to avoid sending keystrokes to other apps (e.g. the IDE) when the
+        game window is not focused.
+        """
+        try:
+            hwnd = win32gui.GetForegroundWindow()
+            if not hwnd:
+                return False
+            title = win32gui.GetWindowText(hwnd)
+            return window_title.lower() in title.lower()
+        except Exception:
+            return False
+
 else:
     def activate_game_window(window_title: str):
         logger.warning("[activate_game_window] Not implemented on this platform")
@@ -486,6 +503,10 @@ else:
 
     def resize_window(window_title: str, width: int = 1296, height: int = 759):
         logger.warning("[resize_window] Not implemented on this platform")
+
+
+    def is_game_window_foreground(window_title: str) -> bool:
+        return True
 
 
 # ---------------------------------------------------------------------------
