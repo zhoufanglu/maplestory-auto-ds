@@ -1,5 +1,6 @@
 bot:
   mode: "detect" # detect = 只检测不攻击, hunt = 路线挂机
+  template: "character/fashi_lv_se.png"   # 角色外观模板（定位用）
   auto_buff: true                  # 自动加 buff 开关 true=开 false=关
   attack: "directional"
   map: "hou_zi_3" #duoluozhuyi dong_bu_yan_shan_V hou_zi_3
@@ -55,7 +56,6 @@ title:
 
 appearance:
   enable: true                    # 用角色外观(fashi.png)辅助定位，防称号丢失/冲突
-  template: "character/fashi.png"
   search_radius: 140              # 在上次角色位置附近搜索外观的半径(像素)
   center_fallback_radius: 260     # 无历史位置时围绕屏幕中心搜索
   match_threshold: 0.85           # CCORR_NORMED 相关度阈值 0~1，>=0.85 用外观，<0.85 用称号
@@ -141,4 +141,5 @@ health_monitor:
   warmup_reads: 15              # 启动后前N次有效读数不喝药（防止首帧未渲染误判0%）
 
 ui_coords:
-  ui_y_start: 610                   # 根据实际游戏窗口调整：底部UI栏Y起点
+  ui_y_start: 200                     # 角色定位识别范围上边界（Y），0=从屏幕顶部开始
+  ui_y_end: 880                     # 角色定位识别范围下边界（Y），此值以下不识别

@@ -429,7 +429,11 @@ class KeyBoardController:
                 time.sleep(0.05)
                 self._press_key_serialized(self.key_jump)
                 # 抓绳优化：按跳的同时按住 up 一段时间（向下跳除外）。
-                if self.cmd_up_down != "down" and self.jump_hold_up_seconds > 0:
+                # FIXED 模式（小地图固定坐标）下跳过，避免误按上键。
+                fixed = self.cfg.get("minimap", {}).get("fixed", False)
+                if (not fixed
+                        and self.cmd_up_down != "down"
+                        and self.jump_hold_up_seconds > 0):
                     self._hold_up_until = time.time() + self.jump_hold_up_seconds
             elif self.cmd_action == "teleport":
                 time.sleep(0.05)

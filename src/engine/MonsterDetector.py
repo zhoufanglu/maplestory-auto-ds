@@ -147,7 +147,7 @@ class MonsterDetector:
         self.img_appearance = None
         self.img_appearance_gray = None
         self.img_appearance_mask = None
-        appearance_path = self.cfg.get("appearance", {}).get("template", "character/fashi.png")
+        appearance_path = self.cfg.get("bot", {}).get("template", "character/fashi.png")
         if os.path.exists(appearance_path):
             raw = load_image(appearance_path, cv2.IMREAD_UNCHANGED)
             if len(raw.shape) == 3 and raw.shape[2] == 4:
@@ -879,10 +879,14 @@ class MonsterDetector:
             anchor = (fw // 2, fh // 2)
             radius = center_radius
 
+        ui_y_start = int(self.cfg.get("ui_coords", {}).get("ui_y_start", 0))
+        ui_y_end = int(self.cfg.get("ui_coords", {}).get("ui_y_end", 0))
         x0 = max(0, anchor[0] - radius)
-        y0 = max(0, anchor[1] - radius)
+        y0 = max(0, anchor[1] - radius, ui_y_start)
         x1 = min(fw, anchor[0] + radius + tw)
         y1 = min(fh, anchor[1] + radius + th)
+        if ui_y_end > 0:
+            y1 = min(y1, ui_y_end)
         if x1 - x0 < tw or y1 - y0 < th:
             return None, None
         roi = self.img_frame[y0:y1, x0:x1]
@@ -1377,11 +1381,18 @@ class MonsterDetector:
             if not manual_locked:
                 filtered = []
                 rejected = []
+                ui_y_start = int(self.cfg.get("ui_coords", {}).get("ui_y_start", 0))
+                ui_y_end = int(self.cfg.get("ui_coords", {}).get("ui_y_end", 0))
                 for cand in candidates:
                     src = cand.get("src", "unknown")
                     center_dist_px = cand.get("center_dist_px", 0.0)
                     jump_px = cand.get("jump_px", 0.0)
+                    cy = cand["loc"][1]
 
+                    # Y 范围过滤：只在 [ui_y_start, ui_y_end] 内识别
+                    if cy < ui_y_start or (ui_y_end > 0 and cy > ui_y_end):
+                        rejected.append((src, "out_of_y", round(cy, 1), round(cand["score"], 4)))
+                        continue
                     if src != "prev" and center_dist_px > center_accept_radius:
                         rejected.append((src, "far_from_center", round(center_dist_px, 1), round(cand["score"], 4)))
                         continue
@@ -2533,9 +2544,10 @@ class MonsterDetector:
                         if not self.is_on_ladder:
                             move_x = "none"
             elif mode == "hunt" and not follow_route:
-                # 没路线时才左右搜索找怪
+                # 没路线时才左右搜索找怪（FIXED 固定坐标模式下关闭，避免乱走）
                 self._hunt_no_monster_frames += 1
-                if attack_style == "directional":
+                fixed = self.cfg.get("minimap", {}).get("fixed", False)
+                if attack_style == "directional" and not fixed:
                     search_x, search_y, search_action = self._get_hunt_search_command()
                     if search_x != "none" or search_y != "none" or search_action != "none":
                         move_x, move_y, action = search_x, search_y, search_action
@@ -2661,6 +2673,19 @@ class MonsterDetector:
         if self.is_show_debug:
             self._update_debug_overlay()        # Text first (bottom layer)
             self._draw_search_region(x0, y0, x1, y1)  # Search border
+            # 画两条红线标记识别范围 [ui_y_start, ui_y_end]，范围外不识别
+            ui_y_start = int(self.cfg.get("ui_coords", {}).get("ui_y_start", 0))
+            ui_y_end = int(self.cfg.get("ui_coords", {}).get("ui_y_end", 0))
+            if self.img_frame_debug is not None:
+                fw = self.img_frame_debug.shape[1]
+                if ui_y_start > 0:
+                    cv2.line(self.img_frame_debug, (0, ui_y_start), (fw, ui_y_start), (0, 0, 255), 2)
+                    cv2.putText(self.img_frame_debug, f"ui_y_start={ui_y_start}", (8, ui_y_start - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                if ui_y_end > 0:
+                    cv2.line(self.img_frame_debug, (0, ui_y_end), (fw, ui_y_end), (0, 0, 255), 2)
+                    cv2.putText(self.img_frame_debug, f"ui_y_end={ui_y_end}", (8, ui_y_end - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             # Draw minimap rectangle (matches reference project)
             if self.img_minimap is not None:
                 draw_rectangle(

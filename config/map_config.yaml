@@ -61,8 +61,8 @@ hou_zi_3:
     width_boundary_pct: 0.8         # 黄线边界：角色只能在中部这个比例内移动（0=关闭）
   attack_in_area:
     is_attack_in_area: true        # 攻击区域开关：true=角色限制在下方矩形内（绿色虚线）
-    # x: 115                             # 矩形左上角 x（相对小地图左上角）
-    x: 70                             # 矩形左上角 x（相对小地图左上角）
+    x: 115                             # 矩形左上角 x（相对小地图左上角）
+    # x: 70                             # 矩形左上角 x（相对小地图左上角）
     y: 50                             # 矩形左上角 y
     width: 15                         # 矩形宽（0=不生效）
     height: 15                        # 矩形高
@@ -71,6 +71,27 @@ hou_zi_3:
     monsters:
       js_hou_zi:
         diff_thres: 0.2
+        scales: [ 1 ]
+
+hou_zi_2:
+  minimap:
+    x: 18
+    y: 130
+    width: 136
+    height: 147
+    width_boundary_pct: 0.8         # 黄线边界：角色只能在中部这个比例内移动（0=关闭）
+  attack_in_area:
+    is_attack_in_area: true        # 攻击区域开关：true=角色限制在下方矩形内（绿色虚线）
+    # x: 115                             # 矩形左上角 x（相对小地图左上角）
+    x: 80                           # 矩形左上角 x（相对小地图左上角）
+    y: 50                             # 矩形左上角 y
+    width: 15                         # 矩形宽（0=不生效）
+    height: 15                        # 矩形高
+    screen_scale: 0                 # 主画面投影缩放：0=自动估算（游戏画面宽/小地图宽），或手动指定
+  monster_detect:
+    monsters:
+      js_hou_zi:
+        diff_thres: 0.01
         scales: [ 1 ]
 
 # 魔法密林 北部2（备用，坐标先存下）
